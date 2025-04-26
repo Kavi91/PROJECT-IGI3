@@ -20,20 +20,24 @@ class Parameters:
         # RGB stats (can be updated with dataset-specific values)
         self.img_means_rgb = [0.485, 0.456, 0.406]
         self.img_stds_rgb = [0.229, 0.224, 0.225]
+
+        # Add to your params.py if needed
+        self.use_imu = True  # Whether to use IMU data
+        self.imu_feature_size = 512  # Size of IMU features
         
         # Network parameters
         self.rnn_hidden_size = 1000
-        self.rnn_dropout_out = 0.3
+        self.rnn_dropout_out = 0.5
         self.rnn_dropout_between = 0.0
-        self.conv_dropout = (0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.5)
+        self.conv_dropout = (0.5, 0.5, 0.5, 0.3, 0.3, 0.3, 0.3, 0.3, 0.7)
         self.batch_norm = True
         self.rot_weight = 100  # Weight for rotation loss
         
         # Training parameters
         self.epochs = 100
-        self.n_processors = 6  # Adjust based on your system
+        self.n_processors = 25  # Adjust based on your system
         self.pin_mem = True
-        self.optim = {'opt': 'Adam', 'lr': 1e-5, 'weight_decay': 0.00001}
+        self.optim = {'opt': 'Adam', 'lr': 1e-5, 'weight_decay': 0.0005}
         
         # Coordinate transformation matrix (identity by default)
         self.body_to_camera = torch.tensor([[1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=torch.float32)
@@ -43,16 +47,23 @@ class Parameters:
         
         # Trajectories for training and validation
         self.train_trajectories = [
-            ('Kite_training/sunny', 'trajectory_0000'),
-            ('Kite_training/sunny', 'trajectory_0001'),
-            ('Kite_training/sunny', 'trajectory_0002'),
-            ('Kite_training/sunny', 'trajectory_0003'),
-            ('Kite_training/sunny', 'trajectory_0004')
+
+            ('Kite_training/sunny', 'trajectory_0004'),
+            ('Kite_training/sunny', 'trajectory_0006'),
+            ('Kite_training/sunny', 'trajectory_0012'),
+            ('Kite_training/sunny', 'trajectory_0014'),
+            
         ]
         
         self.valid_trajectories = [
-            ('Kite_training/sunny', 'trajectory_0005'),
-            ('Kite_training/sunny', 'trajectory_0006')
+            ('Kite_training/sunny', 'trajectory_0016'),
+            ('Kite_training/sunny', 'trajectory_0001'),
+
+            ('Kite_training/sunny', 'trajectory_0007'),
+            ('Kite_training/sunny', 'trajectory_0013'),
+
+
+
         ]
         
         # Output paths

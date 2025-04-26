@@ -162,7 +162,7 @@ class GeometricSequenceAugmenter:
             img = T.ToPILImage()(seq_tensor[i])
             # Apply perspective
             transformed = T.functional.perspective(img, startpoints, endpoints, fill=0)
-            # Convert back to tensor
+# Convert back to tensor
             result.append(T.ToTensor()(transformed))
         
         return torch.stack(result)
@@ -315,165 +315,6 @@ class CutoutSequenceAugmenter:
         return seq
 
 
-class WeatherSequenceAugmenter:
-    """
-    Applies consistent weather-like effects across a sequence of frames.
-    Simulates environmental conditions like fog, rain streaks, and illumination changes.
-    """
-    def __init__(self, 
-                 fog_prob=0.2,
-                 fog_density_range=(0.1, 0.3),
-                 streak_prob=0.2,
-                 streak_count_range=(10, 30),
-                 streak_width_range=(1, 2),
-                 streak_intensity_range=(0.05, 0.15),
-                 vignette_prob=0.2,
-                 vignette_range=(0.5, 0.9)):
-        """
-        Args:
-            fog_prob: Probability of applying fog effect
-            fog_density_range: Range of fog density (min, max)
-            streak_prob: Probability of applying rain/snow streaks
-            streak_count_range: Range of streak count (min, max)
-            streak_width_range: Range of streak width in pixels (min, max)
-            streak_intensity_range: Range of streak intensity (min, max)
-            vignette_prob: Probability of applying vignette
-            vignette_range: Range of vignette size (min, max)
-        """
-        self.fog_prob = fog_prob
-        self.fog_density_range = fog_density_range
-        self.streak_prob = streak_prob
-        self.streak_count_range = streak_count_range
-        self.streak_width_range = streak_width_range
-        self.streak_intensity_range = streak_intensity_range
-        self.vignette_prob = vignette_prob
-        self.vignette_range = vignette_range
-    
-    def apply_fog(self, seq_tensor):
-        """Apply consistent fog effect to the sequence."""
-        # Get random fog density and color
-        density = random.uniform(self.fog_density_range[0], self.fog_density_range[1])
-        fog_color = torch.tensor([random.uniform(0.7, 1.0), 
-                                  random.uniform(0.7, 1.0), 
-                                  random.uniform(0.7, 1.0)])
-        
-        # Apply fog consistently to each frame
-        result = []
-        for i in range(seq_tensor.size(0)):
-            # Blend frame with fog color based on density
-            fog_frame = seq_tensor[i] * (1 - density) + fog_color.view(3, 1, 1) * density
-            result.append(fog_frame)
-        
-        return torch.stack(result)
-    
-    def apply_streaks(self, seq_tensor):
-        """Apply consistent rain or snow streaks to the sequence."""
-        height, width = seq_tensor.size(2), seq_tensor.size(3)
-        
-        # Generate streak parameters (same for all frames in sequence)
-        num_streaks = random.randint(self.streak_count_range[0], self.streak_count_range[1])
-        streak_width = random.randint(self.streak_width_range[0], self.streak_width_range[1])
-        streak_intensity = random.uniform(self.streak_intensity_range[0], self.streak_intensity_range[1])
-        
-        # Generate streak positions and angles (consistent across frames)
-        streaks = []
-        for _ in range(num_streaks):
-            x = random.randint(0, width)
-            y1 = random.randint(-height // 2, height // 2)
-            length = random.randint(height // 6, height // 3)
-            angle = random.uniform(-0.2, 0.2)  # Small angle variation
-            streaks.append((x, y1, length, angle, streak_width))
-        
-        # Apply streaks consistently to each frame with small position shifts for realism
-        result = []
-        for frame_idx in range(seq_tensor.size(0)):
-            frame = seq_tensor[frame_idx].clone()
-            
-            # Apply each streak
-            for idx, (x, y1, length, angle, width) in enumerate(streaks):
-                # Move streaks down slightly in each frame for a rain effect
-                y_offset = (frame_idx * 10) % height
-                
-                # Update y position with offset
-                y1_offset = (y1 + y_offset) % height
-                
-                # Create streak mask
-                for i in range(length):
-                    # Calculate streak position with angle
-                    y = y1_offset + i
-                    x_shift = int(i * angle)
-                    x_pos = (x + x_shift) % width
-                    
-                    # Ensure y is within bounds
-                    if 0 <= y < height:
-                        # Add streak with width
-                        for w in range(-width // 2, width // 2 + 1):
-                            x_w = (x_pos + w) % width
-                            # Add streak with slight intensity variation
-                            intensity_var = streak_intensity * random.uniform(0.8, 1.2)
-                            frame[:, y, x_w] += intensity_var
-            
-            # Clamp values to valid range
-            frame = torch.clamp(frame, 0, 1)
-            result.append(frame)
-        
-        return torch.stack(result)
-    
-    def apply_vignette(self, seq_tensor):
-        """Apply consistent vignette effect to the sequence."""
-        height, width = seq_tensor.size(2), seq_tensor.size(3)
-        
-        # Generate vignette parameters
-        vignette_size = random.uniform(self.vignette_range[0], self.vignette_range[1])
-        
-        # Create vignette mask
-        center_x, center_y = width // 2, height // 2
-        x = torch.arange(width).view(1, -1).expand(height, -1)
-        y = torch.arange(height).view(-1, 1).expand(-1, width)
-        
-        # Calculate distance from center (normalized)
-        dist = torch.sqrt(((x - center_x) / width * 2) ** 2 + 
-                         ((y - center_y) / height * 2) ** 2)
-        
-        # Create vignette mask
-        vignette_mask = torch.clamp(1 - dist / vignette_size, 0, 1)
-        
-        # Apply vignette consistently to each frame
-        result = []
-        for i in range(seq_tensor.size(0)):
-            # Apply vignette mask to each channel
-            vignette_frame = seq_tensor[i] * vignette_mask.unsqueeze(0)
-            result.append(vignette_frame)
-        
-        return torch.stack(result)
-    
-    def __call__(self, seq_tensor):
-        """
-        Apply weather augmentations consistently to a sequence.
-        
-        Args:
-            seq_tensor: Sequence of frames tensor [seq_len, channels, height, width]
-            
-        Returns:
-            Augmented sequence tensor [seq_len, channels, height, width]
-        """
-        seq = seq_tensor.clone()
-        
-        # Apply fog
-        if random.random() < self.fog_prob:
-            seq = self.apply_fog(seq)
-        
-        # Apply rain/snow streaks
-        if random.random() < self.streak_prob:
-            seq = self.apply_streaks(seq)
-        
-        # Apply vignette
-        if random.random() < self.vignette_prob:
-            seq = self.apply_vignette(seq)
-        
-        return seq
-
-
 class SequentialAugmentationPipeline:
     """
     Combines multiple sequence augmenters into a single pipeline.
@@ -530,14 +371,7 @@ def create_vo_augmentation_pipeline(
     # Cutout augmentation params
     cutout_prob=0.4,
     cutout_count=(1, 3),
-    cutout_size_range=(0.05, 0.15),
-    
-    # Weather augmentation params
-    fog_prob=0.1,
-    fog_density_range=(0.1, 0.2),
-    streak_prob=0.1,
-    streak_count_range=(10, 20),
-    vignette_prob=0.2
+    cutout_size_range=(0.05, 0.15)
 ):
     """
     Create a comprehensive augmentation pipeline for visual odometry.
@@ -579,15 +413,5 @@ def create_vo_augmentation_pipeline(
         cutout_size_range=cutout_size_range
     )
     pipeline.add_augmenter(cutout_augmenter)
-    
-    # Add weather augmenter
-    weather_augmenter = WeatherSequenceAugmenter(
-        fog_prob=fog_prob,
-        fog_density_range=fog_density_range,
-        streak_prob=streak_prob,
-        streak_count_range=streak_count_range,
-        vignette_prob=vignette_prob
-    )
-    pipeline.add_augmenter(weather_augmenter)
     
     return pipeline

@@ -2,9 +2,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+import os
 from torch.nn.init import kaiming_normal_, constant_
 
 from params import par
+from IMU import IMUFeatureExtractor, VisualInertialFusion
 
 def conv(batchNorm, in_planes, out_planes, kernel_size=3, stride=1, dropout=0):
     """Create a convolutional block with optional batch normalization."""
@@ -22,15 +24,27 @@ def conv(batchNorm, in_planes, out_planes, kernel_size=3, stride=1, dropout=0):
             nn.Dropout(dropout)
         )
 
-class RGBVO(nn.Module):
-    """RGB Visual Odometry model based on FlowNet + LSTM architecture."""
-    
-    def __init__(self, imsize1=184, imsize2=608, batchNorm=True):
-        super(RGBVO, self).__init__()
+class VisualInertialOdometryModel(nn.Module):
+    """
+    Visual-Inertial Odometry model that combines RGB images and IMU data.
+    Based on FlowNet + LSTM architecture with IMU integration.
+    """
+    def __init__(self, 
+                 imsize1=184, 
+                 imsize2=608, 
+                 batchNorm=True,
+                 use_imu=True,
+                 imu_feature_size=128,
+                 imu_input_size=21,  # 21 for integrated features, 6 for raw
+                 use_adaptive_weighting=True):
+        super(VisualInertialOdometryModel, self).__init__()
         
         self.imsize1 = imsize1
         self.imsize2 = imsize2
         self.batchNorm = batchNorm
+        self.use_imu = use_imu
+        self.imu_feature_size = imu_feature_size
+        self.imu_input_size = imu_input_size
         
         # FlowNet-based encoder
         self.conv1   = conv(self.batchNorm,   6,   64, kernel_size=7, stride=2, dropout=par.conv_dropout[0])
@@ -49,9 +63,28 @@ class RGBVO(nn.Module):
             dummy_output = self.encode_image(dummy_input)
             self.feature_size = dummy_output.numel()
         
+        # IMU processing network (if enabled)
+        if self.use_imu:
+            # IMU feature extractor
+            self.imu_feature_extractor = IMUFeatureExtractor(
+                input_size=self.imu_input_size,
+                hidden_size=self.imu_feature_size,
+                output_size=self.imu_feature_size,
+                dropout=0.2
+            )
+            
+            # Fusion layer
+            self.fusion_layer = VisualInertialFusion(
+                visual_size=self.feature_size,
+                imu_size=self.imu_feature_size,
+                fusion_size=par.rnn_hidden_size,
+                use_adaptive_weighting=use_adaptive_weighting
+            )
+        
         # LSTM layer for sequential processing
+        lstm_input_size = par.rnn_hidden_size if self.use_imu else self.feature_size
         self.rnn = nn.LSTM(
-            input_size=self.feature_size,
+            input_size=lstm_input_size,
             hidden_size=par.rnn_hidden_size,
             num_layers=2,
             dropout=par.rnn_dropout_between,
@@ -95,13 +128,15 @@ class RGBVO(nn.Module):
         out_conv6 = self.conv6(out_conv5)
         return out_conv6
     
-    def forward(self, x):
+    def forward(self, x, imu_data=None):
         """
         Forward pass through the network.
         
         Args:
             x: Input tensor of shape [batch_size, seq_len+1, 3, H, W]
                Contains seq_len+1 consecutive RGB frames
+            imu_data: Optional IMU tensor of shape [batch_size, seq_len, imu_input_size]
+                     Contains processed IMU measurements between frames
         
         Returns:
             Tensor of shape [batch_size, seq_len, 6] with predicted relative poses
@@ -122,6 +157,14 @@ class RGBVO(nn.Module):
         # Encode frame pairs
         x = self.encode_image(x)
         x = x.view(batch_size, seq_len, -1)
+        
+        # Process IMU data if available
+        if self.use_imu and imu_data is not None:
+            # Process IMU data with feature extractor
+            imu_features = self.imu_feature_extractor(imu_data)
+            
+            # Fuse visual and IMU features
+            x = self.fusion_layer(x, imu_features)
         
         # Process with LSTM
         x, _ = self.rnn(x)
@@ -152,18 +195,22 @@ class RGBVO(nn.Module):
         # Compute rotation and translation losses
         rot_loss = F.mse_loss(pred_rot, target_rot)
         trans_loss = F.mse_loss(pred_trans, target_trans)
+
+        l2_lambda = 0.001
+        l2_reg = sum(param.pow(2).sum() for param in self.parameters())
+    
+        total_loss = rot_loss + 10 * trans_loss + l2_lambda * l2_reg
         
-        # Weighted total loss
-        total_loss = par.rot_weight * rot_loss + trans_loss
         
         return total_loss, rot_loss, trans_loss
+
 
 def load_pretrained_flownet(model, flownet_path):
     """
     Load pretrained FlowNet weights into the model.
     
     Args:
-        model: RGBVO model
+        model: VisualInertialOdometryModel model
         flownet_path: Path to FlowNet weights
         
     Returns:
@@ -183,37 +230,79 @@ def load_pretrained_flownet(model, flownet_path):
         else:
             pretrained_weights = checkpoint
         
-        # Map FlowNet layers to our model
+        # Print the keys to see what's available
+        print("Available keys in pretrained weights:")
+        key_sample = list(pretrained_weights.keys())[:10]  # Show first 10 keys
+        for key in key_sample:
+            print(f"  - {key}")
+        
+        # Map FlowNet layers to our model - using exact key structure from weights
         conv_layers_map = {
-            'conv1': model.conv1[0],
-            'conv2': model.conv2[0],
-            'conv3': model.conv3[0],
-            'conv3_1': model.conv3_1[0],
-            'conv4': model.conv4[0],
-            'conv4_1': model.conv4_1[0],
-            'conv5': model.conv5[0],
-            'conv5_1': model.conv5_1[0],
-            'conv6': model.conv6[0]
+            'conv1.0': model.conv1[0],
+            'conv2.0': model.conv2[0],
+            'conv3.0': model.conv3[0],
+            'conv3_1.0': model.conv3_1[0],
+            'conv4.0': model.conv4[0],
+            'conv4_1.0': model.conv4_1[0],
+            'conv5.0': model.conv5[0],
+            'conv5_1.0': model.conv5_1[0],
+            'conv6.0': model.conv6[0]
         }
         
-        # These are possible prefixes in FlowNet weights
-        prefixes = ['', 'module.', 'net.']
-        
-        # Try to match and load weights for conv layers
+        # Load convolutional weights
         matched_layers = 0
         for layer_name, layer in conv_layers_map.items():
-            matched = False
-            for prefix in prefixes:
-                key = f"{prefix}{layer_name}.weight"
-                if key in pretrained_weights:
-                    if layer.weight.data.shape == pretrained_weights[key].shape:
-                        layer.weight.data.copy_(pretrained_weights[key])
-                        matched = True
-                        matched_layers += 1
-                        break
+            weight_key = f"{layer_name}.weight"
+            if weight_key in pretrained_weights:
+                if layer.weight.data.shape == pretrained_weights[weight_key].shape:
+                    layer.weight.data.copy_(pretrained_weights[weight_key])
+                    print(f"Loaded weights for: {layer_name}")
+                    matched_layers += 1
+                else:
+                    print(f"Shape mismatch for {layer_name}: {layer.weight.data.shape} vs {pretrained_weights[weight_key].shape}")
+            else:
+                print(f"Key not found: {weight_key}")
+        
+        # Also load batch norm weights if applicable
+        if model.batchNorm:
+            bn_layers_map = {
+                'conv1.1': model.conv1[1],
+                'conv2.1': model.conv2[1],
+                'conv3.1': model.conv3[1],
+                'conv3_1.1': model.conv3_1[1],
+                'conv4.1': model.conv4[1],
+                'conv4_1.1': model.conv4_1[1],
+                'conv5.1': model.conv5[1],
+                'conv5_1.1': model.conv5_1[1],
+                'conv6.1': model.conv6[1] if len(model.conv6) > 1 else None
+            }
             
-            if not matched:
-                print(f"No match found for layer: {layer_name}")
+            for layer_name, layer in bn_layers_map.items():
+                if layer is None:
+                    continue
+                    
+                weight_key = f"{layer_name}.weight"
+                bias_key = f"{layer_name}.bias"
+                mean_key = f"{layer_name}.running_mean"
+                var_key = f"{layer_name}.running_var"
+                
+                if all(k in pretrained_weights for k in [weight_key, bias_key, mean_key, var_key]):
+                    # Check shape before copying
+                    if (layer.weight.data.shape == pretrained_weights[weight_key].shape and
+                        layer.bias.data.shape == pretrained_weights[bias_key].shape and
+                        layer.running_mean.shape == pretrained_weights[mean_key].shape and
+                        layer.running_var.shape == pretrained_weights[var_key].shape):
+                        
+                        layer.weight.data.copy_(pretrained_weights[weight_key])
+                        layer.bias.data.copy_(pretrained_weights[bias_key])
+                        layer.running_mean.copy_(pretrained_weights[mean_key])
+                        layer.running_var.copy_(pretrained_weights[var_key])
+                        print(f"Loaded BatchNorm for: {layer_name}")
+                        matched_layers += 1
+                    else:
+                        print(f"Shape mismatch for BatchNorm {layer_name}")
+                else:
+                    print(f"BatchNorm keys not found for: {layer_name}")
         
         if matched_layers > 0:
             print(f"Successfully loaded weights for {matched_layers} layers")
@@ -224,16 +313,6 @@ def load_pretrained_flownet(model, flownet_path):
             
     except Exception as e:
         print(f"Error loading FlowNet weights: {e}")
+        import traceback
+        traceback.print_exc()
         return False
-
-import os
-
-if __name__ == "__main__":
-    # Simple test
-    model = RGBVO()
-    print(f"Model created with feature size: {model.feature_size}")
-    
-    # Test with dummy input
-    dummy_input = torch.randn(2, 6, 184, 608)  # [batch_size, seq_len+1, 3, H, W]
-    dummy_output = model(dummy_input)
-    print(f"Output shape: {dummy_output.shape}")
