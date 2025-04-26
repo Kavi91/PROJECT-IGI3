@@ -1,0 +1,18 @@
+2025-04-24 12:55:29,095 - INFO - Training trajectories: [('Kite_training/sunny', 'trajectory_0000'), ('Kite_training/sunny', 'trajectory_0001'), ('Kite_training/sunny', 'trajectory_0002'), ('Kite_training/sunny', 'trajectory_0003'), ('Kite_training/sunny', 'trajectory_0004'), ('Kite_training/sunny', 'trajectory_0005')], Count: 6
+2025-04-24 12:55:29,095 - INFO - Validation trajectories: [('Kite_training/sunny', 'trajectory_0006'), ('Kite_training/sunny', 'trajectory_0007'), ('Kite_training/sunny', 'trajectory_0008'), ('Kite_training/sunny', 'trajectory_0009')], Count: 4
+2025-04-24 12:55:29,095 - INFO - Generating new data info (files not found)
+2025-04-24 12:55:29,339 - INFO - Number of training samples: 7958
+2025-04-24 12:55:29,340 - INFO - Number of validation samples: 2204
+2025-04-24 12:55:29,481 - INFO - Number of training batches: 330
+2025-04-24 12:55:29,481 - INFO - Number of validation batches: 91
+2025-04-24 12:55:29,481 - INFO - Instantiating DepthVO model
+2025-04-24 12:55:29,733 - INFO - Starting training for 100 epochs
+2025-04-24 12:57:58,220 - INFO - Epoch 1/100, Train Loss: 1.350466, Valid Loss: 0.118195, ETA: 4:05:00
+2025-04-24 12:57:58,457 - INFO - New best validation loss: 0.118195
+2025-04-24 12:57:58,657 - INFO - New best training loss: 1.350466
+2025-04-24 13:00:33,139 - INFO - Epoch 2/100, Train Loss: 0.251159, Valid Loss: 0.116681, ETA: 4:07:25
+2025-04-24 13:00:33,421 - INFO - New best validation loss: 0.116681
+2025-04-24 13:00:33,680 - INFO - New best training loss: 0.251159
+2025-04-24 13:03:09,711 - INFO - Epoch 3/100, Train Loss: 0.120938, Valid Loss: 0.092503, ETA: 4:07:20
+2025-04-24 13:03:09,983 - INFO - New best validation loss: 0.092503
+2025-04-24 13:03:10,247 - INFO - New best training loss: 0.120938

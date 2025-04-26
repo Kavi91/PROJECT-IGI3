@@ -1,0 +1,342 @@
+Axis Permutation Test Results
+Ground Truth: results/seasonsforest_Easy_P003/pose_gt.txt
+Predictions: results/seasonsforest_Easy_P003/pose_est.txt
+
+==================================================
+
+Permutation 1: Map: XYZ
+Transformation Matrix:
+[[1. 0. 0.]
+ [0. 1. 0.]
+ [0. 0. 1.]]
+--------------------------------------------------
+
+Permutation 2: Map: XYZ-X
+Transformation Matrix:
+[[-1.  0.  0.]
+ [ 0.  1.  0.]
+ [ 0.  0.  1.]]
+--------------------------------------------------
+
+Permutation 3: Map: XYZ-Y
+Transformation Matrix:
+[[ 1.  0.  0.]
+ [ 0. -1.  0.]
+ [ 0.  0.  1.]]
+--------------------------------------------------
+
+Permutation 4: Map: XYZ-Z
+Transformation Matrix:
+[[ 1.  0.  0.]
+ [ 0.  1.  0.]
+ [ 0.  0. -1.]]
+--------------------------------------------------
+
+Permutation 5: Map: XYZ-X-Y
+Transformation Matrix:
+[[-1.  0.  0.]
+ [ 0. -1.  0.]
+ [ 0.  0.  1.]]
+--------------------------------------------------
+
+Permutation 6: Map: XYZ-X-Z
+Transformation Matrix:
+[[-1.  0.  0.]
+ [ 0.  1.  0.]
+ [ 0.  0. -1.]]
+--------------------------------------------------
+
+Permutation 7: Map: XYZ-Y-Z
+Transformation Matrix:
+[[ 1.  0.  0.]
+ [ 0. -1.  0.]
+ [ 0.  0. -1.]]
+--------------------------------------------------
+
+Permutation 8: Map: XYZ-X-Y-Z
+Transformation Matrix:
+[[-1.  0.  0.]
+ [ 0. -1.  0.]
+ [ 0.  0. -1.]]
+--------------------------------------------------
+
+Permutation 9: Map: XZY
+Transformation Matrix:
+[[1. 0. 0.]
+ [0. 0. 1.]
+ [0. 1. 0.]]
+--------------------------------------------------
+
+Permutation 10: Map: XZY-X
+Transformation Matrix:
+[[-1.  0.  0.]
+ [ 0.  0.  1.]
+ [ 0.  1.  0.]]
+--------------------------------------------------
+
+Permutation 11: Map: XZY-Y
+Transformation Matrix:
+[[ 1.  0.  0.]
+ [ 0.  0.  1.]
+ [ 0. -1.  0.]]
+--------------------------------------------------
+
+Permutation 12: Map: XZY-Z
+Transformation Matrix:
+[[ 1.  0.  0.]
+ [ 0.  0. -1.]
+ [ 0.  1.  0.]]
+--------------------------------------------------
+
+Permutation 13: Map: XZY-X-Y
+Transformation Matrix:
+[[-1.  0.  0.]
+ [ 0.  0.  1.]
+ [ 0. -1.  0.]]
+--------------------------------------------------
+
+Permutation 14: Map: XZY-X-Z
+Transformation Matrix:
+[[-1.  0.  0.]
+ [ 0.  0. -1.]
+ [ 0.  1.  0.]]
+--------------------------------------------------
+
+Permutation 15: Map: XZY-Y-Z
+Transformation Matrix:
+[[ 1.  0.  0.]
+ [ 0.  0. -1.]
+ [ 0. -1.  0.]]
+--------------------------------------------------
+
+Permutation 16: Map: XZY-X-Y-Z
+Transformation Matrix:
+[[-1.  0.  0.]
+ [ 0.  0. -1.]
+ [ 0. -1.  0.]]
+--------------------------------------------------
+
+Permutation 17: Map: YXZ
+Transformation Matrix:
+[[0. 1. 0.]
+ [1. 0. 0.]
+ [0. 0. 1.]]
+--------------------------------------------------
+
+Permutation 18: Map: YXZ-X
+Transformation Matrix:
+[[ 0.  1.  0.]
+ [-1.  0.  0.]
+ [ 0.  0.  1.]]
+--------------------------------------------------
+
+Permutation 19: Map: YXZ-Y
+Transformation Matrix:
+[[ 0. -1.  0.]
+ [ 1.  0.  0.]
+ [ 0.  0.  1.]]
+--------------------------------------------------
+
+Permutation 20: Map: YXZ-Z
+Transformation Matrix:
+[[ 0.  1.  0.]
+ [ 1.  0.  0.]
+ [ 0.  0. -1.]]
+--------------------------------------------------
+
+Permutation 21: Map: YXZ-X-Y
+Transformation Matrix:
+[[ 0. -1.  0.]
+ [-1.  0.  0.]
+ [ 0.  0.  1.]]
+--------------------------------------------------
+
+Permutation 22: Map: YXZ-X-Z
+Transformation Matrix:
+[[ 0.  1.  0.]
+ [-1.  0.  0.]
+ [ 0.  0. -1.]]
+--------------------------------------------------
+
+Permutation 23: Map: YXZ-Y-Z
+Transformation Matrix:
+[[ 0. -1.  0.]
+ [ 1.  0.  0.]
+ [ 0.  0. -1.]]
+--------------------------------------------------
+
+Permutation 24: Map: YXZ-X-Y-Z
+Transformation Matrix:
+[[ 0. -1.  0.]
+ [-1.  0.  0.]
+ [ 0.  0. -1.]]
+--------------------------------------------------
+
+Permutation 25: Map: YZX
+Transformation Matrix:
+[[0. 1. 0.]
+ [0. 0. 1.]
+ [1. 0. 0.]]
+--------------------------------------------------
+
+Permutation 26: Map: YZX-X
+Transformation Matrix:
+[[ 0.  1.  0.]
+ [ 0.  0.  1.]
+ [-1.  0.  0.]]
+--------------------------------------------------
+
+Permutation 27: Map: YZX-Y
+Transformation Matrix:
+[[ 0. -1.  0.]
+ [ 0.  0.  1.]
+ [ 1.  0.  0.]]
+--------------------------------------------------
+
+Permutation 28: Map: YZX-Z
+Transformation Matrix:
+[[ 0.  1.  0.]
+ [ 0.  0. -1.]
+ [ 1.  0.  0.]]
+--------------------------------------------------
+
+Permutation 29: Map: YZX-X-Y
+Transformation Matrix:
+[[ 0. -1.  0.]
+ [ 0.  0.  1.]
+ [-1.  0.  0.]]
+--------------------------------------------------
+
+Permutation 30: Map: YZX-X-Z
+Transformation Matrix:
+[[ 0.  1.  0.]
+ [ 0.  0. -1.]
+ [-1.  0.  0.]]
+--------------------------------------------------
+
+Permutation 31: Map: YZX-Y-Z
+Transformation Matrix:
+[[ 0. -1.  0.]
+ [ 0.  0. -1.]
+ [ 1.  0.  0.]]
+--------------------------------------------------
+
+Permutation 32: Map: YZX-X-Y-Z
+Transformation Matrix:
+[[ 0. -1.  0.]
+ [ 0.  0. -1.]
+ [-1.  0.  0.]]
+--------------------------------------------------
+
+Permutation 33: Map: ZXY
+Transformation Matrix:
+[[0. 0. 1.]
+ [1. 0. 0.]
+ [0. 1. 0.]]
+--------------------------------------------------
+
+Permutation 34: Map: ZXY-X
+Transformation Matrix:
+[[ 0.  0.  1.]
+ [-1.  0.  0.]
+ [ 0.  1.  0.]]
+--------------------------------------------------
+
+Permutation 35: Map: ZXY-Y
+Transformation Matrix:
+[[ 0.  0.  1.]
+ [ 1.  0.  0.]
+ [ 0. -1.  0.]]
+--------------------------------------------------
+
+Permutation 36: Map: ZXY-Z
+Transformation Matrix:
+[[ 0.  0. -1.]
+ [ 1.  0.  0.]
+ [ 0.  1.  0.]]
+--------------------------------------------------
+
+Permutation 37: Map: ZXY-X-Y
+Transformation Matrix:
+[[ 0.  0.  1.]
+ [-1.  0.  0.]
+ [ 0. -1.  0.]]
+--------------------------------------------------
+
+Permutation 38: Map: ZXY-X-Z
+Transformation Matrix:
+[[ 0.  0. -1.]
+ [-1.  0.  0.]
+ [ 0.  1.  0.]]
+--------------------------------------------------
+
+Permutation 39: Map: ZXY-Y-Z
+Transformation Matrix:
+[[ 0.  0. -1.]
+ [ 1.  0.  0.]
+ [ 0. -1.  0.]]
+--------------------------------------------------
+
+Permutation 40: Map: ZXY-X-Y-Z
+Transformation Matrix:
+[[ 0.  0. -1.]
+ [-1.  0.  0.]
+ [ 0. -1.  0.]]
+--------------------------------------------------
+
+Permutation 41: Map: ZYX
+Transformation Matrix:
+[[0. 0. 1.]
+ [0. 1. 0.]
+ [1. 0. 0.]]
+--------------------------------------------------
+
+Permutation 42: Map: ZYX-X
+Transformation Matrix:
+[[ 0.  0.  1.]
+ [ 0.  1.  0.]
+ [-1.  0.  0.]]
+--------------------------------------------------
+
+Permutation 43: Map: ZYX-Y
+Transformation Matrix:
+[[ 0.  0.  1.]
+ [ 0. -1.  0.]
+ [ 1.  0.  0.]]
+--------------------------------------------------
+
+Permutation 44: Map: ZYX-Z
+Transformation Matrix:
+[[ 0.  0. -1.]
+ [ 0.  1.  0.]
+ [ 1.  0.  0.]]
+--------------------------------------------------
+
+Permutation 45: Map: ZYX-X-Y
+Transformation Matrix:
+[[ 0.  0.  1.]
+ [ 0. -1.  0.]
+ [-1.  0.  0.]]
+--------------------------------------------------
+
+Permutation 46: Map: ZYX-X-Z
+Transformation Matrix:
+[[ 0.  0. -1.]
+ [ 0.  1.  0.]
+ [-1.  0.  0.]]
+--------------------------------------------------
+
+Permutation 47: Map: ZYX-Y-Z
+Transformation Matrix:
+[[ 0.  0. -1.]
+ [ 0. -1.  0.]
+ [ 1.  0.  0.]]
+--------------------------------------------------
+
+Permutation 48: Map: ZYX-X-Y-Z
+Transformation Matrix:
+[[ 0.  0. -1.]
+ [ 0. -1.  0.]
+ [-1.  0.  0.]]
+--------------------------------------------------
+

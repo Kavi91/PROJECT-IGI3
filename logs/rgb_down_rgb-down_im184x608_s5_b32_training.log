@@ -1,0 +1,24 @@
+2025-04-25 03:32:49,056 - INFO - Training trajectories: [('Kite_training/sunny', 'trajectory_0000'), ('Kite_training/sunny', 'trajectory_0001'), ('Kite_training/sunny', 'trajectory_0002'), ('Kite_training/sunny', 'trajectory_0003'), ('Kite_training/sunny', 'trajectory_0004'), ('Kite_training/sunny', 'trajectory_0005'), ('Kite_training/sunny', 'trajectory_0006'), ('Kite_training/sunny', 'trajectory_0007')], Count: 8
+2025-04-25 03:32:49,056 - INFO - Validation trajectories: [('Kite_training/sunny', 'trajectory_0008'), ('Kite_training/sunny', 'trajectory_0009'), ('Kite_training/sunny', 'trajectory_0010'), ('Kite_training/sunny', 'trajectory_0011'), ('Kite_training/sunny', 'trajectory_0012'), ('Kite_training/sunny', 'trajectory_0013'), ('Kite_training/sunny', 'trajectory_0014')], Count: 7
+2025-04-25 03:32:49,056 - INFO - Generating new data info (files not found)
+2025-04-25 03:32:49,372 - INFO - Number of training samples: 10605
+2025-04-25 03:32:49,372 - INFO - Number of validation samples: 3860
+2025-04-25 03:32:49,574 - INFO - Number of training batches: 330
+2025-04-25 03:32:49,574 - INFO - Number of validation batches: 120
+2025-04-25 03:32:49,574 - INFO - Instantiating RGBDownVO model
+2025-04-25 03:32:50,562 - INFO - Model has 64 parameters
+2025-04-25 03:32:50,562 - INFO - Sample model keys: ['rgb_down_deepvo.conv1.0.weight', 'rgb_down_deepvo.conv1.1.weight', 'rgb_down_deepvo.conv1.1.bias', 'rgb_down_deepvo.conv1.1.running_mean', 'rgb_down_deepvo.conv1.1.running_var', 'rgb_down_deepvo.conv1.1.num_batches_tracked', 'rgb_down_deepvo.conv2.0.weight', 'rgb_down_deepvo.conv2.1.weight', 'rgb_down_deepvo.conv2.1.bias', 'rgb_down_deepvo.conv2.1.running_mean']
+2025-04-25 03:32:50,562 - INFO - Target prefixes that exist in model: []
+2025-04-25 03:32:50,562 - INFO - Extended target prefixes: ['rgb_down_deepvo.flownet', 'rgb_down_deepvo.conv1', 'rgb_down_deepvo.conv2', 'rgb_down_deepvo.conv3', 'rgb_down_deepvo.conv3_1', 'rgb_down_deepvo.conv4', 'rgb_down_deepvo.conv4_1', 'rgb_down_deepvo.conv5', 'rgb_down_deepvo.conv5_1', 'rgb_down_deepvo.conv6', 'rgb_down_deepvo_flownet']
+2025-04-25 03:32:50,562 - INFO - Loading pre-trained FlowNet weights from /home/krkavinda/DeepVO-pytorch/FlowNet_models/pytorch/flownets_bn_EPE2.459.pth
+2025-04-25 03:32:50,616 - INFO - FlowNet weights file contains 4 keys: ['state_dict', 'epoch', 'arch', 'best_EPE']
+2025-04-25 03:32:50,616 - INFO - Found 'state_dict' key in weights file, using it for loading
+2025-04-25 03:32:50,616 - INFO - Pretrained weights contain 63 parameters
+2025-04-25 03:32:50,616 - INFO - Sample weight keys: ['conv1.0.weight', 'conv1.1.weight', 'conv1.1.bias', 'conv1.1.running_mean', 'conv1.1.running_var']
+2025-04-25 03:32:50,617 - INFO - No key matches found, attempting shape-based matching...
+2025-04-25 03:32:50,617 - INFO - Matched 45 layers by shape
+2025-04-25 03:32:50,618 - INFO - Successfully loaded 45 layers from FlowNet weights
+2025-04-25 03:32:50,618 - INFO - Starting training for 100 epochs
+2025-04-25 03:37:02,155 - INFO - Epoch 1/100, Train Loss: 1.161735, Valid Loss: 0.265486, ETA: 6:55:02
+2025-04-25 03:37:03,586 - INFO - New best validation loss: 0.265486
+2025-04-25 03:37:04,972 - INFO - New best training loss: 1.161735

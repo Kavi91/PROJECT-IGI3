@@ -1,0 +1,99 @@
+
+==================================================
+n_processors: 25
+data_dir: /media/krkavinda/New Volume/Mid-Air-Dataset/MidAir_processed
+image_dir: /media/krkavinda/New Volume/Mid-Air-Dataset/MidAir_processed
+depth_dir: /media/krkavinda/New Volume/Mid-Air-Dataset/MidAir_processed
+pose_dir: /media/krkavinda/New Volume/Mid-Air-Dataset/MidAir_processed
+use_rgb: True
+use_rgb_down: True
+use_depth: False
+use_imu: False
+use_gps: False
+model_type: fusion
+all_climate_sets: ['Kite_training/sunny']
+selected_climate_sets: ['Kite_training/sunny']
+desired_traj_mapping: {'Kite_training/sunny': ['trajectory_0000', 'trajectory_0001', 'trajectory_0002', 'trajectory_0003', 'trajectory_0004', 'trajectory_0005', 'trajectory_0006', 'trajectory_0007', 'trajectory_0008', 'trajectory_0009', 'trajectory_0010', 'trajectory_0011', 'trajectory_0012', 'trajectory_0013', 'trajectory_0014']}
+train_traj_ids: {'Kite_training/sunny': ['trajectory_0000', 'trajectory_0001', 'trajectory_0002', 'trajectory_0003', 'trajectory_0004', 'trajectory_0005', 'trajectory_0006', 'trajectory_0007']}
+valid_traj_ids: {'Kite_training/sunny': ['trajectory_0008', 'trajectory_0009', 'trajectory_0010', 'trajectory_0011', 'trajectory_0012', 'trajectory_0013', 'trajectory_0014']}
+resize_mode: rescale
+img_w: 608
+img_h: 184
+img_means_rgb: [0.47936661756540994, 0.48375150432146713, 0.3484503145952662]
+img_stds_rgb: [0.25256204244183744, 0.2337063712709893, 0.26253557999605914]
+img_means_rgb_down: [0.45772498861764843, 0.4447029471463476, 0.21794496308566164]
+img_stds_rgb_down: [0.2686281949171557, 0.24000586898883877, 0.19460613477557687]
+depth_mean: 23.3
+depth_std: 4.82
+imu_mean: [-0.932191269814109, 0.02114363586864676, -9.952302117255693, -0.0017813787889728403, -0.0046232953887263145, 0.02501910251550836]
+imu_std: [0.9400627092929562, 0.5856915279948983, 1.6326655370582144, 0.09254830342482313, 0.08659216582297578, 0.1853202191840489]
+gps_mean: [322.08660127517794, 40.57563336738513, 5.496793319566847, 5.423105815922741, -0.12041459947251248, 0.24507364240488722, 7.305901535395633, 4.451917060845869, 3.768787689709652]
+gps_std: [271.8029591449282, 188.15914199032537, 64.04838429216638, 8.51853971136692, 7.3973774854473655, 2.556763363166211, 1.2843044709453575, 5.574737558233685, 4.327756948718024]
+img_means_02: [0.47936661756540994, 0.48375150432146713, 0.3484503145952662]
+img_stds_02: [0.25256204244183744, 0.2337063712709893, 0.26253557999605914]
+stats_sample_fraction: 1.0
+depth_stats: {}
+minus_point_5: True
+seq_len: (5, 7)
+sample_times: 3
+overlap: 1
+aug_policy: color,cutout
+brightness_range: 0.3
+saturation_range: 2.0
+contrast_range: 0.5
+cutout_ratio: 0.5
+world_to_camera: tensor([[0., 1., 0.],
+        [0., 0., 1.],
+        [1., 0., 0.]])
+body_to_camera: tensor([[0., 1., 0.],
+        [0., 0., 1.],
+        [1., 0., 0.]])
+world_to_camera_down: tensor([[ 0.,  1.,  0.],
+        [ 1.,  0.,  0.],
+        [ 0.,  0., -1.]])
+rnn_hidden_size: 1000
+rnn_dropout_out: 0.5
+rnn_dropout_between: 0.0
+conv_dropout: (0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.6)
+clip: 1.0
+batch_norm: True
+rot_weight: 100
+epochs: 100
+batch_size: 24
+pin_mem: True
+optim: {'opt': 'Adam', 'lr': 1e-05, 'weight_decay': 1e-05}
+pretrained_flownet: /home/krkavinda/DeepVO-pytorch/FlowNet_models/pytorch/flownets_bn_EPE2.459.pth
+resume: False
+resume_t_or_v: .train
+train_data_info_path: datainfo/train_df_midair_seq5_sample3_b24_fusion.pickle
+valid_data_info_path: datainfo/valid_df_midair_seq5_sample3_b24_fusion.pickle
+load_model_path: models/midair_im184x608_s5_b24_rnn1000_fusion.model.train
+load_optimizer_path: models/midair_im184x608_s5_b24_rnn1000_fusion.optimizer.train
+record_path: records/midair_im184x608_s5_b24_rnn1000_fusion.txt
+save_model_path: models/midair_im184x608_s5_b24_rnn1000_fusion.model
+save_optimizer_path: models/midair_im184x608_s5_b24_rnn1000_fusion.optimizer
+==================================================
+==================================================
+Epoch 1
+train loss mean: -83.064732, std: 23.11
+valid loss mean: -154.387482, std: 0.39
+==================================================
+Epoch 2
+train loss mean: -136.146810, std: 9.66
+valid loss mean: -186.980615, std: 0.08
+==================================================
+Epoch 3
+train loss mean: -164.293064, std: 6.31
+valid loss mean: -206.171025, std: 0.06
+==================================================
+Epoch 4
+train loss mean: -183.458098, std: 4.97
+valid loss mean: -224.167917, std: 0.05
+==================================================
+Epoch 5
+train loss mean: -199.699792, std: 4.66
+valid loss mean: -238.997088, std: 0.06
+==================================================
+Epoch 6
+train loss mean: -214.703456, std: 4.60
+valid loss mean: -253.900296, std: 0.06

@@ -1,0 +1,21 @@
+{
+  "timestamp": "2025-04-25 15:06:41",
+  "epoch": null,
+  "metrics": {
+    "loss": 2.1764785520732404,
+    "translation_error": 0.30471002696431243,
+    "rotation_error": 0.10175515404165102,
+    "gradient_norm": 0.0
+  },
+  "model_stats": {
+    "total_params": 407224898,
+    "weight_norm_mean": 28.150006595721916,
+    "weight_norm_std": 22.42898865146995,
+    "bias_mean": 0.06499781995892154,
+    "bias_std": 0.24655643988215192,
+    "params_near_zero": 102376,
+    "near_zero_percentage": 0.025139916665900916
+  },
+  "sequence_lengths": {
+    "mean": 5.0,
+    "min": 

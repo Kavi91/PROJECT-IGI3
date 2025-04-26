@@ -1,0 +1,75 @@
+2025-04-24 09:28:35,683 - INFO - Training on 6 trajectories
+2025-04-24 09:28:35,683 - INFO - Creating training data info...
+2025-04-24 09:28:35,869 - INFO - Saved training data info to datainfo/train_df_rgbdown_seq5_sample3.pickle
+2025-04-24 09:28:35,917 - INFO - Created dataloader with 333 batches
+2025-04-24 09:28:36,896 - INFO - Starting training for 100 epochs
+2025-04-24 09:31:33,786 - INFO - Epoch 1/100, Loss: 1.158073
+2025-04-24 09:34:29,121 - INFO - Epoch 2/100, Loss: 0.120853
+2025-04-24 09:37:22,163 - INFO - Epoch 3/100, Loss: 0.089618
+2025-04-24 09:57:52,153 - INFO - Training on 6 trajectories
+2025-04-24 09:57:52,153 - INFO - Validating on 4 trajectories
+2025-04-24 10:00:04,272 - INFO - Training on 6 trajectories
+2025-04-24 10:00:04,272 - INFO - Validating on 4 trajectories
+2025-04-24 10:00:04,272 - INFO - Creating training data info...
+2025-04-24 10:00:04,447 - INFO - Saved training data info to datainfo/train_df_rgbdown_seq5_sample3.pickle
+2025-04-24 10:00:04,448 - INFO - Creating validation data info...
+2025-04-24 10:00:04,515 - INFO - Saved validation data info to datainfo/valid_df_rgbdown_seq5_sample1.pickle
+2025-04-24 10:00:04,575 - INFO - Created dataloader with 333 training batches and 74 validation batches
+2025-04-24 10:00:05,546 - INFO - Starting training for 100 epochs
+2025-04-24 10:03:18,298 - INFO - Epoch 1/100, Train Loss: 1.107334, Valid Loss: 0.131733, ETA: 5:18:02
+2025-04-24 10:03:19,694 - INFO - New best model saved with validation loss: 0.131733
+2025-04-24 10:05:34,033 - INFO - Training on 6 trajectories
+2025-04-24 10:05:34,033 - INFO - Validating on 4 trajectories
+2025-04-24 10:05:34,059 - INFO - Loaded training data info from datainfo/train_df_rgbdown_seq5_sample3.pickle
+2025-04-24 10:06:31,183 - INFO - Training on 6 trajectories
+2025-04-24 10:06:31,183 - INFO - Validating on 4 trajectories
+2025-04-24 10:06:31,209 - INFO - Loaded training data info from datainfo/train_df_rgbdown_seq5_sample3.pickle
+2025-04-24 10:07:06,549 - INFO - Training on 6 trajectories
+2025-04-24 10:07:06,549 - INFO - Validating on 4 trajectories
+2025-04-24 10:07:06,575 - INFO - Loaded training data info from datainfo/train_df_rgbdown_seq5_sample3.pickle
+2025-04-24 10:07:06,599 - INFO - Loaded validation data info from datainfo/valid_df_rgbdown_seq5_sample1.pickle
+2025-04-24 10:08:50,138 - INFO - Training on 6 trajectories
+2025-04-24 10:08:50,138 - INFO - Validating on 4 trajectories
+2025-04-24 10:08:50,138 - INFO - Creating training data info...
+2025-04-24 10:08:50,312 - INFO - Saved training data info to datainfo/train_df_rgbdown_seq5_sample3.pickle
+2025-04-24 10:08:50,312 - INFO - Creating validation data info...
+2025-04-24 10:08:50,366 - INFO - Saved validation data info to datainfo/valid_df_rgbdown_seq5_sample1.pickle
+2025-04-24 10:08:50,425 - INFO - Created dataloader with 333 training batches and 74 validation batches
+2025-04-24 10:08:51,357 - INFO - Starting training for 100 epochs
+2025-04-24 10:11:58,929 - INFO - Epoch 1/100, Train Loss: 1.214787, Valid Loss: 0.110887, ETA: 5:09:29
+2025-04-24 10:12:02,056 - INFO - New best model saved with validation loss: 0.110887
+2025-04-24 10:15:12,197 - INFO - Epoch 2/100, Train Loss: 0.106818, Valid Loss: 0.089501, ETA: 5:08:27
+2025-04-24 10:15:15,272 - INFO - New best model saved with validation loss: 0.089501
+2025-04-24 10:18:27,326 - INFO - Epoch 3/100, Train Loss: 0.089128, Valid Loss: 0.078059, ETA: 5:07:02
+2025-04-24 10:18:30,095 - INFO - New best model saved with validation loss: 0.078059
+2025-04-24 10:21:40,832 - INFO - Epoch 4/100, Train Loss: 0.086112, Valid Loss: 0.083228, ETA: 5:04:12
+2025-04-24 10:24:53,024 - INFO - Epoch 5/100, Train Loss: 0.084261, Valid Loss: 0.073156, ETA: 5:01:41
+2025-04-24 10:24:54,793 - INFO - New best model saved with validation loss: 0.073156
+2025-04-24 10:24:56,251 - INFO - Saved checkpoint at epoch 5
+2025-04-24 10:28:10,124 - INFO - Epoch 6/100, Train Loss: 0.083467, Valid Loss: 0.068699, ETA: 4:59:13
+2025-04-24 10:28:13,027 - INFO - New best model saved with validation loss: 0.068699
+2025-04-24 10:31:22,327 - INFO - Epoch 7/100, Train Loss: 0.082511, Valid Loss: 0.069327, ETA: 4:55:40
+2025-04-24 10:34:33,562 - INFO - Epoch 8/100, Train Loss: 0.081464, Valid Loss: 0.070326, ETA: 4:52:34
+2025-04-24 10:37:47,159 - INFO - Epoch 9/100, Train Loss: 0.080681, Valid Loss: 0.070561, ETA: 4:49:52
+2025-04-24 10:40:51,854 - INFO - Epoch 10/100, Train Loss: 0.079198, Valid Loss: 0.071760, ETA: 4:45:43
+2025-04-24 10:40:53,296 - INFO - Saved checkpoint at epoch 10
+2025-04-24 10:44:00,594 - INFO - Epoch 11/100, Train Loss: 0.077596, Valid Loss: 0.070896, ETA: 4:42:06
+2025-04-24 10:47:07,497 - INFO - Epoch 12/100, Train Loss: 0.075718, Valid Loss: 0.070885, ETA: 4:38:32
+2025-04-24 10:50:12,334 - INFO - Epoch 13/100, Train Loss: 0.073331, Valid Loss: 0.083789, ETA: 4:34:48
+2025-04-24 10:53:22,864 - INFO - Epoch 14/100, Train Loss: 0.071514, Valid Loss: 0.083082, ETA: 4:31:45
+2025-04-24 10:56:35,822 - INFO - Epoch 15/100, Train Loss: 0.069387, Valid Loss: 0.084896, ETA: 4:28:54
+2025-04-24 10:56:37,265 - INFO - Saved checkpoint at epoch 15
+2025-04-24 10:59:50,170 - INFO - Epoch 16/100, Train Loss: 0.067453, Valid Loss: 0.083469, ETA: 4:26:00
+2025-04-24 11:03:02,020 - INFO - Epoch 17/100, Train Loss: 0.065615, Valid Loss: 0.086437, ETA: 4:22:59
+2025-04-24 11:06:14,303 - INFO - Epoch 18/100, Train Loss: 0.063558, Valid Loss: 0.081139, ETA: 4:19:59
+2025-04-24 11:09:20,313 - INFO - Epoch 19/100, Train Loss: 0.062348, Valid Loss: 0.090699, ETA: 4:16:31
+2025-04-24 11:12:28,414 - INFO - Epoch 20/100, Train Loss: 0.060524, Valid Loss: 0.094208, ETA: 4:13:13
+2025-04-24 11:12:29,830 - INFO - Saved checkpoint at epoch 20
+2025-04-24 11:15:45,090 - INFO - Epoch 21/100, Train Loss: 0.059730, Valid Loss: 0.100169, ETA: 4:10:23
+2025-04-24 11:18:50,170 - INFO - Epoch 22/100, Train Loss: 0.057695, Valid Loss: 0.103067, ETA: 4:06:55
+2025-04-24 11:21:56,367 - INFO - Epoch 23/100, Train Loss: 0.056532, Valid Loss: 0.096300, ETA: 4:03:32
+2025-04-24 11:25:00,307 - INFO - Epoch 24/100, Train Loss: 0.055129, Valid Loss: 0.116475, ETA: 4:00:04
+2025-04-24 11:28:13,340 - INFO - Epoch 25/100, Train Loss: 0.054303, Valid Loss: 0.130483, ETA: 3:57:05
+2025-04-24 11:28:14,779 - INFO - Saved checkpoint at epoch 25
+2025-04-24 11:31:24,313 - INFO - Epoch 26/100, Train Loss: 0.053117, Valid Loss: 0.120231, ETA: 3:53:55
+2025-04-24 11:34:36,573 - INFO - Epoch 27/100, Train Loss: 0.051958, Valid Loss: 0.125464, ETA: 3:50:52

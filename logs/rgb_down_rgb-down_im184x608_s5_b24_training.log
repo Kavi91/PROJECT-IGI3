@@ -1,0 +1,31 @@
+2025-04-24 12:44:21,798 - INFO - Training trajectories: [('Kite_training/sunny', 'trajectory_0000'), ('Kite_training/sunny', 'trajectory_0001'), ('Kite_training/sunny', 'trajectory_0002'), ('Kite_training/sunny', 'trajectory_0003'), ('Kite_training/sunny', 'trajectory_0004'), ('Kite_training/sunny', 'trajectory_0005')], Count: 6
+2025-04-24 12:44:21,798 - INFO - Validation trajectories: [('Kite_training/sunny', 'trajectory_0006'), ('Kite_training/sunny', 'trajectory_0007'), ('Kite_training/sunny', 'trajectory_0008'), ('Kite_training/sunny', 'trajectory_0009')], Count: 4
+2025-04-24 12:44:21,798 - INFO - Generating new data info (files not found)
+2025-04-24 12:44:22,033 - INFO - Number of training samples: 7958
+2025-04-24 12:44:22,033 - INFO - Number of validation samples: 2204
+2025-04-24 12:44:22,171 - INFO - Number of training batches: 330
+2025-04-24 12:44:22,171 - INFO - Number of validation batches: 91
+2025-04-24 12:44:22,171 - INFO - Instantiating RGBDownVO model
+2025-04-24 12:44:23,094 - INFO - Model has 64 parameters
+2025-04-24 12:44:23,095 - INFO - Sample model keys: ['rgb_down_deepvo.conv1.0.weight', 'rgb_down_deepvo.conv1.1.weight', 'rgb_down_deepvo.conv1.1.bias', 'rgb_down_deepvo.conv1.1.running_mean', 'rgb_down_deepvo.conv1.1.running_var', 'rgb_down_deepvo.conv1.1.num_batches_tracked', 'rgb_down_deepvo.conv2.0.weight', 'rgb_down_deepvo.conv2.1.weight', 'rgb_down_deepvo.conv2.1.bias', 'rgb_down_deepvo.conv2.1.running_mean']
+2025-04-24 12:44:23,095 - INFO - Target prefixes that exist in model: []
+2025-04-24 12:44:23,095 - INFO - Extended target prefixes: ['rgb_down_deepvo.flownet', 'rgb_down_deepvo.conv1', 'rgb_down_deepvo.conv2', 'rgb_down_deepvo.conv3', 'rgb_down_deepvo.conv3_1', 'rgb_down_deepvo.conv4', 'rgb_down_deepvo.conv4_1', 'rgb_down_deepvo.conv5', 'rgb_down_deepvo.conv5_1', 'rgb_down_deepvo.conv6', 'rgb_down_deepvo_flownet']
+2025-04-24 12:44:23,095 - INFO - Loading pre-trained FlowNet weights from /home/krkavinda/DeepVO-pytorch/FlowNet_models/pytorch/flownets_bn_EPE2.459.pth
+2025-04-24 12:44:23,173 - INFO - FlowNet weights file contains 4 keys
+2025-04-24 12:44:23,174 - INFO - Sample keys in FlowNet weights: ['state_dict', 'epoch', 'arch', 'best_EPE']
+2025-04-24 12:44:23,174 - WARNING - No matching layers found between FlowNet weights and model architecture
+2025-04-24 12:44:23,174 - WARNING - Sample missing keys: ['rgb_down_deepvo.conv1.state_dict', 'rgb_down_deepvo.conv3.epoch', 'rgb_down_deepvo.conv2.epoch', 'rgb_down_deepvo.conv4.arch', 'rgb_down_deepvo.conv4_1.arch']
+2025-04-24 12:44:23,174 - WARNING - FlowNet weights loading was unsuccessful
+2025-04-24 12:44:23,174 - WARNING - Sample missing keys: ['rgb_down_deepvo.conv1.state_dict', 'rgb_down_deepvo.conv3.epoch', 'rgb_down_deepvo.conv2.epoch', 'rgb_down_deepvo.conv4.arch', 'rgb_down_deepvo.conv4_1.arch']
+2025-04-24 12:44:23,174 - WARNING - Sample unexpected keys: ['rgb_down_deepvo.conv3.1.running_var', 'rgb_down_deepvo.conv3_1.1.running_var', 'rgb_down_deepvo.conv6.1.running_mean', 'rgb_down_deepvo.conv1.1.bias', 'rgb_down_deepvo.linear.weight']
+2025-04-24 12:44:23,174 - INFO - Attempting aggressive weight matching...
+2025-04-24 12:44:23,239 - ERROR - Error in aggressive weight matching: 'collections.OrderedDict' object has no attribute 'shape'
+2025-04-24 12:44:23,239 - INFO - Starting training for 100 epochs
+2025-04-24 12:47:36,358 - INFO - Epoch 1/100, Train Loss: 1.141067, Valid Loss: 0.087236, ETA: 5:18:38
+2025-04-24 12:47:37,729 - INFO - New best validation loss: 0.087236
+2025-04-24 12:47:39,007 - INFO - New best training loss: 1.141067
+2025-04-24 12:50:42,817 - INFO - Epoch 2/100, Train Loss: 0.111981, Valid Loss: 0.075672, ETA: 5:07:49
+2025-04-24 12:50:44,581 - INFO - New best validation loss: 0.075672
+2025-04-24 12:50:46,316 - INFO - New best training loss: 0.111981
+2025-04-24 12:53:49,191 - INFO - Epoch 3/100, Train Loss: 0.089624, Valid Loss: 0.078035, ETA: 5:01:40
+2025-04-24 12:53:50,917 - INFO - New best training loss: 0.089624

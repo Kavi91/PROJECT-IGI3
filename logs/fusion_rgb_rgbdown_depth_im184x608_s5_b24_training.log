@@ -1,0 +1,28 @@
+2025-04-24 11:40:21,026 - WARNING - No pre-trained RGB-down model found at models/rgbdown_im184x608_s5_b24.model
+2025-04-24 11:40:21,026 - WARNING - Consider training the RGB-down model separately first with train_rgb_down.py
+2025-04-24 11:40:21,027 - INFO - Training on 6 trajectories
+2025-04-24 11:40:21,027 - INFO - Validating on 4 trajectories
+2025-04-24 11:40:21,027 - INFO - Creating training data info...
+2025-04-24 11:40:21,352 - INFO - Saved training data info to datainfo/train_df_midair_seq5_sample3_b24_fusion.pickle
+2025-04-24 11:40:21,352 - INFO - Creating validation data info...
+2025-04-24 11:40:21,456 - INFO - Saved validation data info to datainfo/valid_df_midair_seq5_sample3_b24_fusion.pickle
+2025-04-24 11:40:21,456 - INFO - Training dataset statistics:
+2025-04-24 11:40:21,521 - INFO - Validation dataset statistics:
+2025-04-24 11:40:21,594 - INFO - Created dataloader with 333 training batches and 74 validation batches
+2025-04-24 11:40:22,525 - INFO - Loading pre-trained FlowNet weights from FlowNet_models/pytorch/flownets_bn_EPE2.459.pth
+2025-04-24 11:40:22,628 - WARNING - No matching layers found between FlowNet weights and model architecture
+2025-04-24 11:40:22,629 - INFO - Starting training for 100 epochs
+2025-04-24 11:48:32,056 - INFO - Epoch 1/100, Train Loss: 1.713850, Valid Loss: 0.109853, ETA: 13:27:33
+2025-04-24 11:48:34,610 - INFO - New best model saved with validation loss: 0.109853
+2025-04-24 12:11:18,068 - WARNING - No pre-trained RGB-down model found at models/rgbdown_im184x608_s5_b24.model
+2025-04-24 12:11:18,068 - WARNING - Consider training the RGB-down model separately first with train_rgb_down.py
+2025-04-24 12:11:18,068 - INFO - Training on 6 trajectories
+2025-04-24 12:11:18,068 - INFO - Validating on 4 trajectories
+2025-04-24 12:11:18,190 - INFO - Loaded training data info from datainfo/train_df_midair_seq5_sample3_b24_fusion.pickle
+2025-04-24 12:11:18,200 - INFO - Loaded validation data info from datainfo/valid_df_midair_seq5_sample3_b24_fusion.pickle
+2025-04-24 12:11:18,200 - INFO - Training dataset statistics:
+2025-04-24 12:11:18,266 - INFO - Validation dataset statistics:
+2025-04-24 12:11:18,341 - INFO - Created dataloader with 333 training batches and 74 validation batches
+2025-04-24 12:11:19,372 - INFO - Loading pre-trained FlowNet weights from FlowNet_models/pytorch/flownets_bn_EPE2.459.pth
+2025-04-24 12:11:19,450 - WARNING - No matching layers found between FlowNet weights and model architecture
+2025-04-24 12:11:19,451 - INFO - Starting training for 100 epochs

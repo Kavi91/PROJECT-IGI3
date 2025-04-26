@@ -1,0 +1,14 @@
+Test results for 1 trajectories
+==================================================
+
+Overall average ATE: 0.4963 m
+Overall average RPE Translation: 0.1501 m
+Overall average RPE Rotation: 0.0179 rad
+
+Per-trajectory metrics:
+--------------------------------------------------
+Trajectory: seasonsforest/Easy/P008
+  ATE: 0.4963 ± 0.3618 m
+  RPE Translation: 0.1501 ± 0.0293 m
+  RPE Rotation: 0.0179 ± 0.0032 rad
+

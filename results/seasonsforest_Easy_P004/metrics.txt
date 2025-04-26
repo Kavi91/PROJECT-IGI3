@@ -1,0 +1,10 @@
+Trajectory: seasonsforest/Easy/P004
+Number of sequences: 633
+Sequence-level metrics (averaged):
+  ATE: 0.1012 ± 0.0510 m
+  RPE Translation: 0.0310 ± 0.0187 m
+  RPE Rotation: 0.0034 ± 0.0026 rad
+
+Full trajectory metrics:
+  Full ATE: 18.0390 ± 9.8892 m
+  Full RPE Translation: 0.1505 ± 0.0985 m
