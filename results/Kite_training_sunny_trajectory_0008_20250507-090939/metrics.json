@@ -1,0 +1,23 @@
+{
+    "trajectory": "Kite_training/sunny/trajectory_0008",
+    "integration_params": {
+        "scale_factor": 0.7,
+        "apply_rotation": true
+    },
+    "ate": {
+        "mean": 193.3180318417765,
+        "std": 111.61465429060247,
+        "max": 356.60212306313673
+    },
+    "rpe": {
+        "translation": 0.5128526619754522,
+        "rotation_rad": 0.01564389695360783,
+        "rotation_deg": 0.8963292705792945
+    },
+    "modalities": {
+        "rgb": true,
+        "depth": true,
+        "imu": true,
+        "gps": true
+    }
+}

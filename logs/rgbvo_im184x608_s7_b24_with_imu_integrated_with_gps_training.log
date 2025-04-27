@@ -1,0 +1,43 @@
+2025-05-06 10:48:42,174 - INFO - Epoch 1/100
+2025-05-06 10:56:32,382 - INFO - IMU grad norm: 343837.8060, Visual grad norm: 31405.0874, Depth grad norm: 124103.5585, GPS grad norm: 1998895.9740, IMU/Visual ratio: 10.9485, Depth/Visual ratio: 3.9517, GPS/Visual ratio: 63.6488
+2025-05-06 10:58:13,270 - INFO - Train Loss: 135.395042 ± 591.330832
+2025-05-06 10:58:13,270 - INFO - Val Loss: 31.312782 ± 1.292051
+2025-05-06 10:58:13,270 - INFO - Train Depth Trans Loss: 0.409322
+2025-05-06 10:58:13,270 - INFO - Train GPS Trans Loss: 1.212419
+2025-05-06 10:58:13,270 - INFO - Val Depth Trans Loss: 0.081936
+2025-05-06 10:58:13,270 - INFO - Val GPS Trans Loss: 0.106199
+2025-05-06 10:58:13,270 - INFO - ATE: 1.6105 ± 1.1283 m
+2025-05-06 10:58:13,270 - INFO - RPE Trans: 0.4608 ± 0.0044 m
+2025-05-06 10:58:13,270 - INFO - RPE Rot: 0.0202 ± 0.0016 rad
+2025-05-06 10:58:13,477 - INFO - New best model saved with validation loss: 31.312782
+2025-05-06 10:58:13,677 - INFO - New best ATE model saved with ATE: 1.6105m
+2025-05-06 10:58:13,677 - INFO - Epoch 2/100
+2025-05-06 11:05:55,072 - INFO - IMU grad norm: 1234.6579, Visual grad norm: 233.2863, Depth grad norm: 1210.1323, GPS grad norm: 10458.1112, IMU/Visual ratio: 5.2925, Depth/Visual ratio: 5.1873, GPS/Visual ratio: 44.8295
+2025-05-06 11:07:36,134 - INFO - Train Loss: 26.065443 ± 2.172919
+2025-05-06 11:07:36,134 - INFO - Val Loss: 24.098922 ± 1.602528
+2025-05-06 11:07:36,134 - INFO - Train Depth Trans Loss: 0.027393
+2025-05-06 11:07:36,135 - INFO - Train GPS Trans Loss: 0.040432
+2025-05-06 11:07:36,135 - INFO - Val Depth Trans Loss: 0.085450
+2025-05-06 11:07:36,135 - INFO - Val GPS Trans Loss: 0.088242
+2025-05-06 11:07:36,135 - INFO - ATE: 1.5295 ± 1.0735 m
+2025-05-06 11:07:36,135 - INFO - RPE Trans: 0.4401 ± 0.0099 m
+2025-05-06 11:07:36,135 - INFO - RPE Rot: 0.0328 ± 0.0014 rad
+2025-05-06 11:07:36,387 - INFO - New best model saved with validation loss: 24.098922
+2025-05-06 11:07:36,645 - INFO - New best ATE model saved with ATE: 1.5295m
+2025-05-06 11:07:36,646 - INFO - Epoch 3/100
+2025-05-06 11:15:25,259 - INFO - IMU grad norm: 808.4470, Visual grad norm: 130.0771, Depth grad norm: 1065.5792, GPS grad norm: 7767.6888, IMU/Visual ratio: 6.2151, Depth/Visual ratio: 8.1919, GPS/Visual ratio: 59.7160
+2025-05-06 11:16:57,843 - INFO - Train Loss: 21.006809 ± 0.933980
+2025-05-06 11:16:57,843 - INFO - Val Loss: 21.150323 ± 1.949167
+2025-05-06 11:16:57,843 - INFO - Train Depth Trans Loss: 0.015397
+2025-05-06 11:16:57,843 - INFO - Train GPS Trans Loss: 0.020765
+2025-05-06 11:16:57,843 - INFO - Val Depth Trans Loss: 0.102960
+2025-05-06 11:16:57,843 - INFO - Val GPS Trans Loss: 0.095822
+2025-05-06 11:16:57,843 - INFO - ATE: 1.5879 ± 1.1132 m
+2025-05-06 11:16:57,843 - INFO - RPE Trans: 0.4547 ± 0.0061 m
+2025-05-06 11:16:57,843 - INFO - RPE Rot: 0.0167 ± 0.0016 rad
+2025-05-06 11:16:58,093 - INFO - New best model saved with validation loss: 21.150323
+2025-05-06 11:16:58,094 - INFO - Epoch 4/100
+2025-05-06 11:19:59,081 - INFO - Epoch 1/100
+2025-05-06 12:31:58,120 - INFO - Epoch 1/100
+2025-05-06 12:35:09,889 - INFO - Epoch 1/100
+2025-05-06 12:41:55,186 - INFO - Epoch 1/100

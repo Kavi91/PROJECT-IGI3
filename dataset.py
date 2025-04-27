@@ -30,7 +30,7 @@ def open_float16(image):
         return None
 
 class VisualInertialOdometryDataset(Dataset):
-    """Dataset for visual-inertial odometry."""
+    """Dataset for visual-inertial odometry with GPS support."""
     
     def __init__(self, trajectories, is_training=True, use_imu=True, use_integrated_imu=True):
         """
@@ -104,8 +104,15 @@ class VisualInertialOdometryDataset(Dataset):
                 logger.warning(f"RGB directory not found: {rgb_dir}")
                 continue
                 
-            # Get pose file
-            pose_file = os.path.join(par.pose_dir, climate_set, "poses", f"poses_{trajectory.split('_')[1]}.npy")
+            # Get pose file - decide whether to use camera frame or body frame
+            if hasattr(par, 'use_camera_frame') and par.use_camera_frame:
+                pose_file = os.path.join(par.pose_dir, climate_set, "poses", f"camera_poses_{trajectory.split('_')[1]}.npy")
+                if not os.path.exists(pose_file):
+                    logger.warning(f"Camera frame pose file not found: {pose_file}, falling back to body frame")
+                    pose_file = os.path.join(par.pose_dir, climate_set, "poses", f"poses_{trajectory.split('_')[1]}.npy")
+            else:
+                pose_file = os.path.join(par.pose_dir, climate_set, "poses", f"poses_{trajectory.split('_')[1]}.npy")
+                
             if not os.path.exists(pose_file):
                 logger.warning(f"Pose file not found: {pose_file}")
                 continue
@@ -128,7 +135,14 @@ class VisualInertialOdometryDataset(Dataset):
             if self.use_gps:
                 gps_dir = os.path.join(par.data_dir, climate_set, trajectory, "gps")
                 if os.path.exists(gps_dir):
-                    gps_file = os.path.join(gps_dir, "gps.npy")
+                    if hasattr(par, 'use_camera_frame') and par.use_camera_frame:
+                        gps_file = os.path.join(gps_dir, "camera_gps.npy")
+                        if not os.path.exists(gps_file):
+                            logger.warning(f"Camera GPS file not found: {gps_file}, falling back to body frame")
+                            gps_file = os.path.join(gps_dir, "gps.npy")
+                    else:
+                        gps_file = os.path.join(gps_dir, "gps.npy")
+                    
                     if not os.path.exists(gps_file):
                         logger.warning(f"GPS file not found: {gps_file}")
                         gps_file = None
@@ -139,8 +153,16 @@ class VisualInertialOdometryDataset(Dataset):
             if self.use_imu:
                 imu_dir = os.path.join(par.data_dir, climate_set, trajectory, "imu")
                 if os.path.exists(imu_dir):
-                    imu_file = os.path.join(imu_dir, "imu.npy")
+                    if hasattr(par, 'use_camera_frame') and par.use_camera_frame:
+                        imu_file = os.path.join(imu_dir, "camera_imu.npy")
+                        if not os.path.exists(imu_file):
+                            logger.warning(f"Camera IMU file not found: {imu_file}, falling back to body frame")
+                            imu_file = os.path.join(imu_dir, "imu.npy")
+                    else:
+                        imu_file = os.path.join(imu_dir, "imu.npy")
+                        
                     imu_bias_file = os.path.join(imu_dir, "imu_init_bias.npy")
+                    
                     if not os.path.exists(imu_file):
                         logger.warning(f"IMU file not found: {imu_file}")
                         imu_file = None
@@ -295,21 +317,14 @@ class VisualInertialOdometryDataset(Dataset):
             acc_bias = imu_bias[0]
             gyro_bias = imu_bias[1]
         
-        # Get body_to_camera transformation from params if available
-        body_to_camera = None
-        if hasattr(par, 'body_to_camera'):
-            if isinstance(par.body_to_camera, torch.Tensor):
-                body_to_camera = par.body_to_camera.cpu().numpy()
-            elif isinstance(par.body_to_camera, np.ndarray):
-                body_to_camera = par.body_to_camera
-        
         # Create IMU preprocessor
         imu_preprocessor = IMUPreprocessor(
             gyro_bias_init=gyro_bias,
             acc_bias_init=acc_bias,
             apply_integration=self.use_integrated_imu,
             dt=0.01,
-            body_to_camera=body_to_camera
+            body_to_camera=None,  # Don't apply transformation here - data already in correct frame
+            body_to_camera_translation=None
         )
         
         # Process IMU data with explicit sequence length requirement
@@ -358,6 +373,41 @@ class VisualInertialOdometryDataset(Dataset):
                 return features
             else:
                 return corrected
+    
+    def _preprocess_gps(self, gps_data, seq_len=None):
+        """
+        Preprocess GPS data to extract relevant features.
+        
+        Args:
+            gps_data: Raw GPS data [seq_len, 9] (position [x, y, z], velocity [vx, vy, vz], signal [num_sats, GDOP, PDOP])
+            seq_len: Required sequence length for output features
+            
+        Returns:
+            Preprocessed GPS data [seq_len, feature_dim]
+        """
+        if gps_data is None or len(gps_data) == 0:
+            return None
+            
+        # Extract features: position, velocity, and signal info
+        processed_gps = gps_data.copy()
+        
+        # Ensure data matches the required sequence length
+        if seq_len is None:
+            return processed_gps
+            
+        if len(processed_gps) < seq_len:
+            # Pad by repeating the last frame
+            if len(processed_gps) > 0:
+                last_frame = processed_gps[-1:]
+                padding = np.repeat(last_frame, seq_len - len(processed_gps), axis=0)
+                processed_gps = np.concatenate([processed_gps, padding], axis=0)
+            else:
+                processed_gps = np.zeros((seq_len, 9))
+        else:
+            indices = np.linspace(0, len(processed_gps)-1, seq_len, dtype=int)
+            processed_gps = processed_gps[indices]
+            
+        return processed_gps
     
     def __len__(self):
         """Return the number of sequences in the dataset."""
@@ -420,15 +470,21 @@ class VisualInertialOdometryDataset(Dataset):
         # Get GPS data if enabled
         gps_data = None
         if self.use_gps and sequence['gps_data'] is not None:
-            gps_data = torch.FloatTensor(sequence['gps_data'])
-            gps_data = gps_data[:-1]  # Match seq_len (exclude last frame)
-            # Ensure correct length
-            if gps_data.shape[0] != par.seq_len:
-                if gps_data.shape[0] > par.seq_len:
-                    gps_data = gps_data[:par.seq_len]
-                else:
-                    pad_size = par.seq_len - gps_data.shape[0]
-                    gps_data = torch.cat([gps_data, torch.zeros(pad_size, gps_data.shape[1])], dim=0)
+            try:
+                processed_gps = self._preprocess_gps(sequence['gps_data'], par.seq_len)
+                if processed_gps is not None:
+                    if processed_gps.shape[0] < par.seq_len:
+                        logger.warning(f"Processed GPS still has wrong length: {processed_gps.shape[0]} vs {par.seq_len} needed")
+                        if processed_gps.shape[0] > 0:
+                            last_row = processed_gps[-1:]
+                            padding = np.repeat(last_row, par.seq_len - processed_gps.shape[0], axis=0)
+                            processed_gps = np.concatenate([processed_gps, padding], axis=0)
+                        else:
+                            processed_gps = np.zeros((par.seq_len, 9))
+                    gps_data = torch.FloatTensor(processed_gps)
+            except Exception as e:
+                logger.error(f"Error processing GPS data for sequence {idx}: {e}")
+                gps_data = torch.zeros((par.seq_len, 9))
         
         # Get IMU data with explicit sequence length requirement
         imu_data = None
@@ -455,13 +511,20 @@ class VisualInertialOdometryDataset(Dataset):
         # if self.is_training:
         #     rgb_sequence = self.augmentation_pipeline(rgb_sequence)
         #     if self.use_depth and depth_sequence is not None:
-        #         # Apply geometric augmentations to depth (skip color jitter/noise)
+        #          # Apply geometric augmentations to depth (skip color jitter/noise)
         #         geometric_augs = create_vo_augmentation_pipeline(
-        #             color_jitter_prob=0.0, noise_prob=0.0,
-        #             rotation_prob=0.6, rotation_max_degrees=3.0,
-        #             perspective_prob=0.3, perspective_scale=0.05
-        #         )
-        #         depth_sequence = geometric_augs(depth_sequence)
+        #         color_jitter_prob=0.8,
+        #         brightness_range=0.3,
+        #         contrast_range=0.3,
+        #         saturation_range=0.3,
+        #         hue_range=0.1,
+        #         rotation_prob=0.6,
+        #         rotation_max_degrees=3.0,
+        #         perspective_prob=0.3,
+        #         perspective_scale=0.05,
+        #         cutout_prob=0.5,
+        #         cutout_size_range=(0.05, 0.15)
+        #     )
             # Note: We don't augment IMU or GPS data to maintain physical consistency
         
         # Apply FlowNet normalization if required
@@ -485,7 +548,7 @@ class VisualInertialOdometryDataset(Dataset):
 
 def collate_with_imu(batch):
     """
-    Custom collate function to handle variable-length data.
+    Custom collate function to handle variable-length data with GPS support.
     
     Args:
         batch: List of (rgb_sequence, [depth_sequence], [imu_data], [gps_data], rel_poses, abs_poses) tuples
@@ -543,10 +606,13 @@ def collate_with_imu(batch):
     return_items.extend([rel_poses, abs_poses])
     return tuple(return_items)
 
-def create_data_loaders(batch_size=None, use_imu=True, use_integrated_imu=True):
+def create_data_loaders(batch_size=None, use_imu=True, use_integrated_imu=True, use_depth=None):
     """Create data loaders for training and validation."""
     if batch_size is None:
         batch_size = par.batch_size
+    
+    # Allow overriding depth parameter
+    actual_use_depth = par.use_depth if use_depth is None else use_depth
     
     # Create datasets
     train_dataset = VisualInertialOdometryDataset(
@@ -556,12 +622,18 @@ def create_data_loaders(batch_size=None, use_imu=True, use_integrated_imu=True):
         use_integrated_imu=use_integrated_imu
     )
     
+    # Store the depth flag in train_dataset
+    train_dataset.use_depth = actual_use_depth
+    
     val_dataset = VisualInertialOdometryDataset(
         par.valid_trajectories, 
         is_training=False, 
         use_imu=use_imu,
         use_integrated_imu=use_integrated_imu
     )
+    
+    # Store the depth flag in val_dataset
+    val_dataset.use_depth = actual_use_depth
     
     # Create data loaders with custom collate function
     train_loader = DataLoader(

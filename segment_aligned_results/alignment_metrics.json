@@ -1,0 +1,24 @@
+{
+    "segment_alignment": {
+        "segment_size": 50,
+        "overlap": 25,
+        "metrics": {
+            "before_alignment": {
+                "ate_mean": 242.39530375172592,
+                "ate_std": 145.63406976522919,
+                "ate_max": 635.6797997345168,
+                "rpe_trans": 0.5611210940384733,
+                "rpe_rot": 0.015643896962647064,
+                "rpe_rot_deg": 0.8963292710972045
+            },
+            "after_alignment": {
+                "ate_mean": 1.3025667140593098,
+                "ate_std": 7.570462046929731,
+                "ate_max": 354.3046807157994,
+                "rpe_trans": 0.3539459027576968,
+                "rpe_rot": 0.05389346114714119,
+                "rpe_rot_deg": 3.0878678670834705
+            }
+        }
+    }
+}

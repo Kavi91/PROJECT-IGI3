@@ -1,0 +1,11 @@
+Trajectory: Kite_training/sunny/unknown/trajectory_0016
+Number of sequences: 2195
+Sequence-level metrics (averaged):
+  ATE: 0.5407 ± 0.4048 m
+  RPE Translation: 0.2164 ± 0.0013 m
+  RPE Rotation: 0.0055 ± 0.0005 rad
+  GPS Translation Loss: 0.015724
+
+Full trajectory metrics:
+  Full ATE: 366.2697 ± 198.5163 m
+  Full RPE Translation: 0.6586 ± 0.2368 m

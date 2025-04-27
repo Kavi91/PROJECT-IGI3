@@ -1,0 +1,11 @@
+Trajectory: Kite_training/foggy/unknown/trajectory_2008
+Number of sequences: 2200
+Sequence-level metrics (averaged):
+  ATE: 0.0823 ± 0.0615 m
+  RPE Translation: 0.0329 ± 0.0009 m
+  RPE Rotation: 0.0046 ± 0.0004 rad
+  GPS Translation Loss: 0.000575
+
+Full trajectory metrics:
+  Full ATE: 210.5978 ± 91.4123 m
+  Full RPE Translation: 0.4994 ± 0.1084 m

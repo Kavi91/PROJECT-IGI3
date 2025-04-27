@@ -1,0 +1,11 @@
+Trajectory: Kite_training/cloudy/unknown/trajectory_3008
+Number of sequences: 2200
+Sequence-level metrics (averaged):
+  ATE: 0.0817 ± 0.0611 m
+  RPE Translation: 0.0327 ± 0.0009 m
+  RPE Rotation: 0.0046 ± 0.0004 rad
+  GPS Translation Loss: 0.000558
+
+Full trajectory metrics:
+  Full ATE: 210.6588 ± 91.3871 m
+  Full RPE Translation: 0.4994 ± 0.1084 m

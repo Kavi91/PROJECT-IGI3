@@ -71,31 +71,45 @@ def relative_to_absolute_pose(relative_poses, body_to_camera):
     current_R = torch.eye(3, dtype=torch.float32, device=device)
     current_t = torch.zeros(3, dtype=torch.float32, device=device)
     
-    # Camera to body transformation
-    camera_to_body = torch.inverse(body_to_camera)
+    # No need for transformation if we're using camera frame data with identity matrix
+    if torch.allclose(body_to_camera, torch.eye(3, device=device)):
+        camera_to_body = torch.eye(3, dtype=torch.float32, device=device)
+    else:
+        # Camera to body transformation
+        camera_to_body = torch.inverse(body_to_camera)
     
     for i in range(seq_len):
         rel_pose = relative_poses[i]
         rel_angles = rel_pose[:3].cpu().numpy()
         rel_t_camera = rel_pose[3:]
         
-        # Convert to rotation matrix and transform to body frame
+        # Convert to rotation matrix (already in correct frame)
         R_rel_camera = torch.tensor(euler_to_rotation_matrix(rel_angles), dtype=torch.float32, device=device)
-        R_rel_body = camera_to_body @ R_rel_camera @ body_to_camera
         
-        # Update rotation and position
-        current_R = current_R @ R_rel_body
-        rel_t_body = camera_to_body @ rel_t_camera
-        delta_t_world = current_R @ rel_t_body
+        # No transformation needed if using camera frame with identity matrix
+        if torch.allclose(body_to_camera, torch.eye(3, device=device)):
+            R_rel = R_rel_camera
+        else:
+            # Transform from camera to body frame
+            R_rel = camera_to_body @ R_rel_camera @ body_to_camera
+        
+        # Update rotation
+        current_R = current_R @ R_rel
+        
+        # Transform translation if needed
+        if torch.allclose(body_to_camera, torch.eye(3, device=device)):
+            rel_t = rel_t_camera
+        else:
+            # Transform from camera to body frame
+            rel_t = camera_to_body @ rel_t_camera
+        
+        # Apply rotation to translation
+        delta_t_world = current_R @ rel_t
         current_t = current_t + delta_t_world
         
         # Convert to euler angles
         current_angles = torch.tensor(rotation_matrix_to_euler(current_R.cpu().numpy()), 
                                      dtype=torch.float32, device=device)
-        
-        # Normalize angles
-        current_angles = torch.tensor([normalize_angle(angle) for angle in current_angles], 
-                                      dtype=torch.float32, device=device)
         
         # Create and append absolute pose
         absolute_pose = torch.cat((current_angles, current_t))

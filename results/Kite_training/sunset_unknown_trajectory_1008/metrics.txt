@@ -1,0 +1,11 @@
+Trajectory: Kite_training/sunset/unknown/trajectory_1008
+Number of sequences: 2200
+Sequence-level metrics (averaged):
+  ATE: 0.0825 ± 0.0617 m
+  RPE Translation: 0.0330 ± 0.0009 m
+  RPE Rotation: 0.0046 ± 0.0004 rad
+  GPS Translation Loss: 0.000570
+
+Full trajectory metrics:
+  Full ATE: 211.0049 ± 91.4589 m
+  Full RPE Translation: 0.4995 ± 0.1082 m

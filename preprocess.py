@@ -55,6 +55,14 @@ calib_content = (
     "P1: 512 0 512 0.25  0 384 384 0  0 0 1 0\n"
 )
 
+# Define body-to-camera transformation
+body_to_camera = np.array([
+    [0, 1, 0],
+    [0, 0, -1],
+    [-1, 0, 0]
+])
+body_to_camera_translation = np.array([1.0, 0.0, 0.5])
+
 # Dictionary to store frame counts for each trajectory
 frame_counts = {}
 
@@ -282,31 +290,61 @@ for climate_set in climate_sets:
                 initial_position = positions[0].copy()
                 positions -= initial_position
 
-                # Save poses in World frame (NED) as [roll, pitch, yaw, x, y, z]
-                poses = np.hstack((euler, positions))
+                # Save poses in Body frame (NED) as [roll, pitch, yaw, x, y, z]
+                body_poses = np.hstack((euler, positions))
 
                 # Log raw positions and relative translations
-                logger.info(f"{climate_set}/{traj_key}: First few raw positions (World frame): {positions[:5]}")
+                logger.info(f"{climate_set}/{traj_key}: First few raw positions (Body frame): {positions[:5]}")
                 raw_deltas = np.diff(positions, axis=0)
                 raw_max_translation = np.max(np.linalg.norm(raw_deltas, axis=1)) if len(raw_deltas) > 0 else 0
-                logger.info(f"{climate_set}/{traj_key}: Max raw translation (World frame): {raw_max_translation}")
-
-                # Log relative translations after normalization
-                final_deltas = np.diff(poses[:, 3:], axis=0)
-                final_max_translation = np.max(np.linalg.norm(final_deltas, axis=1)) if len(final_deltas) > 0 else 0
-                logger.info(f"{climate_set}/{traj_key}: Max translation (World frame, after normalization): {final_max_translation}")
+                logger.info(f"{climate_set}/{traj_key}: Max raw translation (Body frame): {raw_max_translation}")
 
                 # Print the first pose to verify alignment
-                logger.info(f"{climate_set}/{traj_key}: First pose (roll, pitch, yaw, x, y, z): {poses[0]}")
+                logger.info(f"{climate_set}/{traj_key}: First body frame pose (roll, pitch, yaw, x, y, z): {body_poses[0]}")
 
-                # Save poses
+                # Save body frame poses
                 traj_id = traj_key.split("_")[1]
-                pose_file = f'{output_dir}/poses/poses_{traj_id}.npy'
-                np.save(pose_file, poses)
-                logger.info(f"Saved poses for {traj_key}, shape: {poses.shape}")
+                body_pose_file = f'{output_dir}/poses/poses_{traj_id}.npy'
+                np.save(body_pose_file, body_poses)
+                logger.info(f"Saved body frame poses for {traj_key}, shape: {body_poses.shape}")
                 
-                if not os.path.exists(pose_file):
-                    logger.error(f"Error: Pose file {pose_file} was not created successfully.")
+                # Transform poses to camera frame
+                camera_poses = np.zeros_like(body_poses)
+                
+                for i in range(len(body_poses)):
+                    # Extract rotation and translation from body frame
+                    body_euler = body_poses[i, :3]
+                    body_position = body_poses[i, 3:6]
+                    
+                    # Convert Euler angles to rotation matrix (in body frame)
+                    # We need to convert from [roll, pitch, yaw] to [yaw, pitch, roll] for scipy's from_euler
+                    body_R = Rotation.from_euler('zyx', body_euler[::-1]).as_matrix()
+                    
+                    # Transform rotation to camera frame
+                    camera_R = body_to_camera @ body_R @ np.linalg.inv(body_to_camera)
+                    
+                    # Convert camera rotation matrix back to Euler angles
+                    # Convert back from [yaw, pitch, roll] to [roll, pitch, yaw]
+                    camera_euler = Rotation.from_matrix(camera_R).as_euler('zyx')[::-1]
+                    
+                    # Transform position to camera frame
+                    camera_position = body_to_camera @ body_position + body_to_camera_translation
+                    
+                    # Store camera frame pose
+                    camera_poses[i, :3] = camera_euler
+                    camera_poses[i, 3:6] = camera_position
+                
+                # Log first camera frame pose
+                logger.info(f"{climate_set}/{traj_key}: First camera frame pose (roll, pitch, yaw, x, y, z): {camera_poses[0]}")
+                
+                # Save camera frame poses
+                camera_pose_file = f'{output_dir}/poses/camera_poses_{traj_id}.npy'
+                np.save(camera_pose_file, camera_poses)
+                logger.info(f"Saved camera frame poses for {traj_key}, shape: {camera_poses.shape}")
+                
+                # Check if files were created successfully
+                if not os.path.exists(body_pose_file) or not os.path.exists(camera_pose_file):
+                    logger.error(f"Error: Pose file(s) were not created successfully.")
                     skipped_trajectories.append((climate_set, traj_key, "Failed to save pose file"))
                     continue
 
@@ -382,15 +420,37 @@ for climate_set in climate_sets:
                                 accelerometer = accelerometer[:num_frames]
                                 gyroscope = gyroscope[:num_frames]
                             
-                            # Combine accelerometer and gyroscope data
-                            imu_data = np.hstack((accelerometer, gyroscope))  # Shape: [num_frames, 6]
+                            # Combine accelerometer and gyroscope data (in body frame)
+                            body_imu_data = np.hstack((accelerometer, gyroscope))  # Shape: [num_frames, 6]
                             
-                            # Save IMU data
+                            # Transform IMU data to camera frame
+                            camera_imu_data = np.zeros_like(body_imu_data)
+                            
+                            for i in range(len(body_imu_data)):
+                                # Transform accelerometer readings to camera frame
+                                acc_body = body_imu_data[i, 0:3]
+                                acc_camera = body_to_camera @ acc_body
+                                
+                                # Transform gyroscope readings to camera frame
+                                gyro_body = body_imu_data[i, 3:6]
+                                gyro_camera = body_to_camera @ gyro_body
+                                
+                                # Store transformed IMU data
+                                camera_imu_data[i, 0:3] = acc_camera
+                                camera_imu_data[i, 3:6] = gyro_camera
+                            
+                            # Save both body frame and camera frame IMU data
                             imu_output_dir = f'{traj_output_dir}/imu'
                             os.makedirs(imu_output_dir, exist_ok=True)
-                            np.save(f'{imu_output_dir}/imu.npy', imu_data)
+                            
+                            # Save body frame IMU data
+                            np.save(f'{imu_output_dir}/imu.npy', body_imu_data)
                             np.save(f'{imu_output_dir}/imu_init_bias.npy', init_bias)
-                            logger.info(f"Saved IMU data for {traj_key}, shape: {imu_data.shape}, init bias shape: {init_bias.shape}")
+                            logger.info(f"Saved body frame IMU data for {traj_key}, shape: {body_imu_data.shape}")
+                            
+                            # Save camera frame IMU data
+                            np.save(f'{imu_output_dir}/camera_imu.npy', camera_imu_data)
+                            logger.info(f"Saved camera frame IMU data for {traj_key}, shape: {camera_imu_data.shape}")
                 except Exception as e:
                     logger.error(f"Error processing IMU data for {climate_set}/{traj_key}: {str(e)}")
                     imu_success = False
@@ -494,18 +554,44 @@ for climate_set in climate_sets:
                             signal_indices = np.clip(signal_indices, 0, num_gps_frames - 1)
                             gps_signal_interp = gps_signal[signal_indices]
                             
-                            # Combine position, velocity, and signal info
-                            gps_data = np.hstack((
+                            # Combine position, velocity, and signal info for body frame
+                            body_gps_data = np.hstack((
                                 gps_position_interp,                  # Position [x, y, z]
                                 gps_velocity_interp,                  # Velocity [vx, vy, vz]
                                 gps_signal_interp[:, :3]              # Signal info [num_sats, GDOP, PDOP]
                             ))
                             
-                            # Save GPS data
+                            # Transform GPS position and velocity to camera frame
+                            camera_gps_data = np.zeros_like(body_gps_data)
+                            
+                            for i in range(len(body_gps_data)):
+                                # Transform position to camera frame
+                                pos_body = body_gps_data[i, 0:3]
+                                pos_camera = body_to_camera @ pos_body + body_to_camera_translation
+                                
+                                # Transform velocity to camera frame
+                                vel_body = body_gps_data[i, 3:6]
+                                vel_camera = body_to_camera @ vel_body
+                                
+                                # Copy signal info unchanged
+                                signal_info = body_gps_data[i, 6:9]
+                                
+                                # Store transformed GPS data
+                                camera_gps_data[i, 0:3] = pos_camera
+                                camera_gps_data[i, 3:6] = vel_camera
+                                camera_gps_data[i, 6:9] = signal_info
+                            
+                            # Save both body frame and camera frame GPS data
                             gps_output_dir = f'{traj_output_dir}/gps'
                             os.makedirs(gps_output_dir, exist_ok=True)
-                            np.save(f'{gps_output_dir}/gps.npy', gps_data)
-                            logger.info(f"Saved GPS data for {traj_key}, shape: {gps_data.shape}")
+                            
+                            # Save body frame GPS data
+                            np.save(f'{gps_output_dir}/gps.npy', body_gps_data)
+                            logger.info(f"Saved body frame GPS data for {traj_key}, shape: {body_gps_data.shape}")
+                            
+                            # Save camera frame GPS data
+                            np.save(f'{gps_output_dir}/camera_gps.npy', camera_gps_data)
+                            logger.info(f"Saved camera frame GPS data for {traj_key}, shape: {camera_gps_data.shape}")
                 except Exception as e:
                     logger.error(f"Error processing GPS data for {climate_set}/{traj_key}: {str(e)}")
                     gps_success = False

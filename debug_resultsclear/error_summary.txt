@@ -1,0 +1,9 @@
+Method,Error(m)
+simple,315.006412
+xyz,208.799946
+zyx,190.570362
+scaled_zyx,193.258597
+inv_xyz,491.553349
+div100,273.245717
+div1000,274.762934
+unwrapped,315.006412

@@ -206,7 +206,7 @@ class CrossModalAttention(nn.Module):
 
         return fused
 
-# New module: Direct Depth to Translation Estimator
+# Direct Depth to Translation Estimator
 class DepthTranslationEstimator(nn.Module):
     def __init__(self, depth_feature_dim=512, hidden_dim=256):
         super(DepthTranslationEstimator, self).__init__()
@@ -230,11 +230,86 @@ class DepthTranslationEstimator(nn.Module):
         """
         return self.estimator(depth_features)
 
+# Direct GPS to Translation Estimator
+class GPSTranslationEstimator(nn.Module):
+    def __init__(self, gps_feature_dim=512, hidden_dim=256):
+        super(GPSTranslationEstimator, self).__init__()
+        self.estimator = nn.Sequential(
+            nn.Linear(gps_feature_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.ReLU(),
+            nn.Linear(hidden_dim // 2, 3)  # 3D translation (x, y, z)
+        )
+        
+    def forward(self, gps_features):
+        """
+        Estimate translation directly from GPS features
+        
+        Args:
+            gps_features: GPS features [batch_size, seq_len, feature_dim]
+            
+        Returns:
+            Estimated translation [batch_size, seq_len, 3]
+        """
+        return self.estimator(gps_features)
+
+# GPS Feature Extractor
+class GPSFeatureExtractor(nn.Module):
+    def __init__(self, input_size=9, hidden_size=128, output_size=256, dropout=0.2):
+        """
+        Args:
+            input_size: Number of GPS features (9: position [x, y, z], velocity [vx, vy, vz], signal [num_sats, GDOP, PDOP])
+            hidden_size: Size of hidden layers
+            output_size: Size of output features
+            dropout: Dropout probability
+        """
+        super(GPSFeatureExtractor, self).__init__()
+        
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.output_size = output_size
+        
+        # Feature extraction network
+        self.encoder = nn.Sequential(
+            nn.Linear(input_size, hidden_size),
+            nn.LeakyReLU(0.1),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_size, hidden_size),
+            nn.LeakyReLU(0.1),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_size, output_size),
+            nn.LeakyReLU(0.1)
+        )
+        
+    def forward(self, gps_features):
+        """
+        Process GPS features.
+        
+        Args:
+            gps_features: Tensor of shape [batch_size, seq_len, input_size]
+        
+        Returns:
+            GPS features of shape [batch_size, seq_len, output_size]
+        """
+        batch_size, seq_len, _ = gps_features.shape
+        
+        # Reshape for batch processing
+        x = gps_features.view(-1, self.input_size)
+        
+        # Extract features
+        x = self.encoder(x)
+        
+        # Reshape back
+        x = x.view(batch_size, seq_len, self.output_size)
+        
+        return x
+
 class VisualInertialOdometryModel(nn.Module):
     """
-    Visual-Inertial Odometry model that combines RGB images, Depth, and IMU data.
-    Uses FlowNet for RGB, MonoDepth2 encoder for Depth, and cross-modal attention for fusion.
-    Adds direct depth-to-translation estimation for improved translation accuracy.
+    Visual-Inertial Odometry model that combines RGB images, Depth, IMU, and GPS data.
+    Uses FlowNet for RGB, MonoDepth2 encoder for Depth, cross-modal attention for fusion,
+    IMU for rotation improvement, and GPS for translation improvement.
     """
     def __init__(self, 
                  imsize1=184, 
@@ -243,8 +318,12 @@ class VisualInertialOdometryModel(nn.Module):
                  use_imu=True,
                  imu_feature_size=128,
                  imu_input_size=21,
+                 use_gps=True,
+                 gps_feature_size=128,
+                 gps_input_size=9,
                  use_adaptive_weighting=True,
                  use_depth_translation=True,
+                 use_gps_translation=True,
                  pretrained_depth_path=None):
         super(VisualInertialOdometryModel, self).__init__()
         
@@ -254,7 +333,11 @@ class VisualInertialOdometryModel(nn.Module):
         self.use_imu = use_imu
         self.imu_feature_size = imu_feature_size
         self.imu_input_size = imu_input_size
+        self.use_gps = use_gps
+        self.gps_feature_size = gps_feature_size
+        self.gps_input_size = gps_input_size
         self.use_depth_translation = use_depth_translation
+        self.use_gps_translation = use_gps_translation
         
         # FlowNet-based encoder for RGB
         self.conv1   = conv(self.batchNorm,   6,   64, kernel_size=7, stride=2, dropout=par.conv_dropout[0])
@@ -304,8 +387,25 @@ class VisualInertialOdometryModel(nn.Module):
                 use_adaptive_weighting=use_adaptive_weighting
             )
         
+        # GPS processing network (if enabled)
+        if self.use_gps:
+            self.gps_feature_extractor = GPSFeatureExtractor(
+                input_size=self.gps_input_size,
+                hidden_size=self.gps_feature_size,
+                output_size=self.gps_feature_size,
+                dropout=0.2
+            )
+            
+            # Fusion layer for visual+IMU and GPS features
+            self.gps_fusion_layer = VisualInertialFusion(
+                visual_size=par.rnn_hidden_size if self.use_imu else 512,
+                imu_size=self.gps_feature_size,  # Treat GPS features like IMU for fusion
+                fusion_size=par.rnn_hidden_size,
+                use_adaptive_weighting=use_adaptive_weighting
+            )
+        
         # LSTM layer for sequential processing
-        lstm_input_size = par.rnn_hidden_size if self.use_imu else 512
+        lstm_input_size = par.rnn_hidden_size if self.use_imu or self.use_gps else 512
         self.rnn = nn.LSTM(
             input_size=lstm_input_size,
             hidden_size=par.rnn_hidden_size,
@@ -318,7 +418,7 @@ class VisualInertialOdometryModel(nn.Module):
         self.rnn_dropout = nn.Dropout(par.rnn_dropout_out)
         self.fc = nn.Linear(in_features=par.rnn_hidden_size, out_features=6)
         
-        # Depth-to-translation estimator (new!)
+        # Depth-to-translation estimator
         if self.use_depth_translation:
             self.depth_translation_estimator = DepthTranslationEstimator(
                 depth_feature_dim=512,
@@ -328,6 +428,21 @@ class VisualInertialOdometryModel(nn.Module):
             # Fusion module to combine LSTM-based and depth-based translation
             self.translation_fusion = nn.Sequential(
                 nn.Linear(6, 32),  # 3 from LSTM-based + 3 from depth-based
+                nn.ReLU(),
+                nn.Linear(32, 3)
+            )
+        
+        # GPS-to-translation estimator
+        if self.use_gps_translation:
+            self.gps_translation_estimator = GPSTranslationEstimator(
+                gps_feature_dim=self.gps_feature_size,
+                hidden_dim=256
+            )
+            
+            # Fusion module to combine LSTM-based, depth-based, and GPS-based translation
+            input_size = 9 if self.use_depth_translation else 6  # 3 (LSTM) + 3 (depth) + 3 (GPS) or 3 (LSTM) + 3 (GPS)
+            self.translation_fusion = nn.Sequential(
+                nn.Linear(input_size, 32),
                 nn.ReLU(),
                 nn.Linear(32, 3)
             )
@@ -365,7 +480,7 @@ class VisualInertialOdometryModel(nn.Module):
         out_conv6 = self.conv6(out_conv5)
         return out_conv6
     
-    def forward(self, rgb, depth=None, imu_data=None):
+    def forward(self, rgb, depth=None, imu_data=None, gps_data=None):
         """
         Forward pass through the network.
         
@@ -373,6 +488,7 @@ class VisualInertialOdometryModel(nn.Module):
             rgb: Input tensor of shape [batch_size, seq_len+1, 3, H, W]
             depth: Depth tensor of shape [batch_size, seq_len+1, 1, H, W]
             imu_data: Optional IMU tensor of shape [batch_size, seq_len, imu_input_size]
+            gps_data: Optional GPS tensor of shape [batch_size, seq_len, gps_input_size]
         
         Returns:
             Tensor of shape [batch_size, seq_len, 6] with predicted relative poses
@@ -397,8 +513,9 @@ class VisualInertialOdometryModel(nn.Module):
         # Project RGB features
         rgb_features = self.rgb_proj(rgb_features)  # [batch_size, seq_len, 512]
         
-        # Initialize depth translation estimations
+        # Initialize depth and GPS translation estimations
         depth_translation = None
+        gps_translation = None
         
         # Process Depth pairs (if provided)
         if depth is not None:
@@ -417,7 +534,7 @@ class VisualInertialOdometryModel(nn.Module):
             # Project Depth features
             depth_features = self.depth_proj(depth_features)  # [batch_size, seq_len, 512]
             
-            # Direct translation estimation from depth (new!)
+            # Direct translation estimation from depth
             if self.use_depth_translation:
                 depth_translation = self.depth_translation_estimator(depth_features)
             
@@ -434,6 +551,18 @@ class VisualInertialOdometryModel(nn.Module):
             # Fuse visual (RGB+Depth) and IMU features
             fused_features = self.fusion_layer(fused_features, imu_features)
         
+        # Process GPS data if available
+        if self.use_gps and gps_data is not None:
+            # Process GPS data with feature extractor
+            gps_features = self.gps_feature_extractor(gps_data)
+            
+            # Direct translation estimation from GPS
+            if self.use_gps_translation:
+                gps_translation = self.gps_translation_estimator(gps_features)
+            
+            # Fuse visual+IMU and GPS features
+            fused_features = self.gps_fusion_layer(fused_features, gps_features)
+        
         # Process with LSTM
         x, _ = self.rnn(fused_features)
         x = self.rnn_dropout(x)
@@ -441,36 +570,51 @@ class VisualInertialOdometryModel(nn.Module):
         # Predict relative poses
         pred = self.fc(x)  # [batch_size, seq_len, 6]
         
-        # # Apply depth-based translation improvement if available
-        # if self.use_depth_translation and depth_translation is not None:
-        #     # Split into rotation and translation components
-        #     pred_rot = pred[:, :, :3]  # Roll, pitch, yaw
-        #     pred_trans = pred[:, :, 3:]  # x, y, z
+        # Apply depth and GPS-based translation improvements if available
+        if (self.use_depth_translation and depth_translation is not None) or \
+           (self.use_gps_translation and gps_translation is not None):
+            # Split into rotation and translation components
+            pred_rot = pred[:, :, :3]  # Roll, pitch, yaw
+            pred_trans = pred[:, :, 3:]  # x, y, z
             
-        #     # Combine LSTM-based and depth-based translation
-        #     combined_trans_input = torch.cat([pred_trans, depth_translation], dim=2)
-        #     refined_trans = pred_trans + 0.5 * depth_translation  # Simple weighted combination
+            # Combine LSTM-based, depth-based, and GPS-based translation
+            trans_inputs = [pred_trans]
+            if self.use_depth_translation and depth_translation is not None:
+                trans_inputs.append(depth_translation)
+            if self.use_gps_translation and gps_translation is not None:
+                trans_inputs.append(gps_translation)
             
-        #     # Recombine with rotation
-        #     pred = torch.cat([pred_rot, refined_trans], dim=2)
+            combined_trans_input = torch.cat(trans_inputs, dim=2)
+            refined_trans = self.translation_fusion(combined_trans_input)
             
-        #     # Store depth translation for loss computation
-        #     self.last_depth_translation = depth_translation
-        # else:
-        #     self.last_depth_translation = None
+            # Recombine with rotation
+            pred = torch.cat([pred_rot, refined_trans], dim=2)
+            
+            # Store depth and GPS translations for loss computation
+            if self.use_depth_translation:
+                self.last_depth_translation = depth_translation
+            else:
+                self.last_depth_translation = None
+            if self.use_gps_translation:
+                self.last_gps_translation = gps_translation
+            else:
+                self.last_gps_translation = None
+        else:
+            self.last_depth_translation = None
+            self.last_gps_translation = None
         
         return pred
     
     def get_loss(self, pred, target):
         """
-        Compute pose prediction loss with depth-supervised translation.
+        Compute pose prediction loss with depth and GPS-supervised translation.
         
         Args:
             pred: Predicted relative poses [batch_size, seq_len, 6]
             target: Target relative poses [batch_size, seq_len, 6]
             
         Returns:
-            Total loss (weighted sum of rotation, translation, and depth-translation losses)
+            Tuple of (total_loss, rot_loss, trans_loss, depth_trans_loss, gps_trans_loss)
         """
         # Split into rotation and translation components
         pred_rot = pred[:, :, :3]
@@ -487,14 +631,20 @@ class VisualInertialOdometryModel(nn.Module):
         if self.use_depth_translation and hasattr(self, 'last_depth_translation') and self.last_depth_translation is not None:
             depth_trans_loss = F.mse_loss(self.last_depth_translation, target_trans)
         
+        # Compute GPS-translation loss if available
+        gps_trans_loss = torch.tensor(0.0, device=pred.device)
+        if self.use_gps_translation and hasattr(self, 'last_gps_translation') and self.last_gps_translation is not None:
+            gps_trans_loss = F.mse_loss(self.last_gps_translation, target_trans)
+        
         # L2 regularization
         l2_lambda = 0.001
         l2_reg = sum(param.pow(2).sum() for param in self.parameters())
     
         # Total loss with weighted components
-        total_loss = rot_loss + 25 * trans_loss  + l2_lambda * l2_reg
+        #total_loss = rot_loss + 50 * trans_loss + depth_trans_loss + gps_trans_loss + l2_lambda * l2_reg
+        total_loss = 100 * rot_loss + 10 * trans_loss + gps_trans_loss + l2_lambda * l2_reg
         
-        return total_loss, rot_loss, trans_loss, depth_trans_loss
+        return total_loss, rot_loss, trans_loss, depth_trans_loss, gps_trans_loss
 
 def load_pretrained_flownet(model, flownet_path):
     """

@@ -1,0 +1,13 @@
+{
+    "trajectory": "Kite_training/sunny/trajectory_0001",
+    "ate_mean": 524.6614821996706,
+    "ate_std": 268.08265771835113,
+    "ate_max": 860.3098700313144,
+    "num_frames": 2205,
+    "modalities": {
+        "rgb": true,
+        "depth": true,
+        "imu": true,
+        "gps": true
+    }
+}

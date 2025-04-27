@@ -1,0 +1,21 @@
+{
+    "trajectory": "Kite_training/sunny/trajectory_0001",
+    "position_error": {
+        "mean": 333.4198742849117,
+        "std": 134.21381026885607,
+        "max": 528.5289164933029
+    },
+    "rotation_error": {
+        "mean": 124.3836954260907,
+        "std": 44.9930298374762,
+        "max": 179.92069873359785
+    },
+    "num_frames": 2205,
+    "is_camera_frame": true,
+    "modalities": {
+        "rgb": true,
+        "depth": true,
+        "imu": true,
+        "gps": true
+    }
+}

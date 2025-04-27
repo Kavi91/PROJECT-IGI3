@@ -11,7 +11,7 @@ from tqdm import tqdm
 import argparse
 
 from params import par
-from model import VisualInertialOdometryModel, load_pretrained_flownet
+from model_2 import VisualInertialOdometryModel, load_pretrained_flownet
 from dataset import create_data_loaders
 from helper import relative_to_absolute_pose, compute_ate, compute_rpe, visualize_trajectory
 
@@ -19,13 +19,14 @@ from helper import relative_to_absolute_pose, compute_ate, compute_rpe, visualiz
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def train_epoch(model, dataloader, optimizer, device, use_imu=True):
+def train_epoch(model, dataloader, optimizer, device):
     """Train the model for one epoch."""
     model.train()
     total_loss = 0.0
     total_rot_loss = 0.0
     total_trans_loss = 0.0
     total_depth_trans_loss = 0.0
+    total_gps_trans_loss = 0.0
     losses = []
     
     # Log gradient information periodically
@@ -33,6 +34,7 @@ def train_epoch(model, dataloader, optimizer, device, use_imu=True):
     imu_grad_norm = 0
     visual_grad_norm = 0
     depth_grad_norm = 0
+    gps_grad_norm = 0
     
     progress_bar = tqdm(dataloader, desc="Training", unit="batch")
     for data in progress_bar:
@@ -47,25 +49,30 @@ def train_epoch(model, dataloader, optimizer, device, use_imu=True):
             idx += 1
         
         imu_data = None
-        if use_imu:
+        if par.use_imu:
             imu_data = data[idx].to(device)
+            idx += 1
+        
+        gps_data = None
+        if par.use_gps:
+            gps_data = data[idx].to(device)
             idx += 1
         
         rel_poses = data[idx].to(device)
         abs_poses = data[idx+1].to(device)
         
         # Forward pass
-        pred_rel_poses = model(rgb_seq, depth=depth_seq, imu_data=imu_data)
+        pred_rel_poses = model(rgb_seq, depth=depth_seq, imu_data=imu_data, gps_data=gps_data)
         
         # Compute loss
-        loss, rot_loss, trans_loss, depth_trans_loss = model.get_loss(pred_rel_poses, rel_poses)
+        loss, rot_loss, trans_loss, depth_trans_loss, gps_trans_loss = model.get_loss(pred_rel_poses, rel_poses)
         losses.append(loss.item())
         
         # Backpropagation
         optimizer.zero_grad()
         loss.backward()
         
-        # Log gradient norms for IMU, visual, and depth parts
+        # Log gradient norms for IMU, visual, depth, and GPS parts
         if log_gradients:
             for name, param in model.named_parameters():
                 if param.grad is not None:
@@ -75,6 +82,8 @@ def train_epoch(model, dataloader, optimizer, device, use_imu=True):
                         visual_grad_norm += param.grad.norm().item()
                     elif 'depth' in name:
                         depth_grad_norm += param.grad.norm().item()
+                    elif 'gps' in name:
+                        gps_grad_norm += param.grad.norm().item()
         
         # Clip gradients
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -85,13 +94,15 @@ def train_epoch(model, dataloader, optimizer, device, use_imu=True):
         total_rot_loss += rot_loss.item()
         total_trans_loss += trans_loss.item()
         total_depth_trans_loss += depth_trans_loss.item()
+        total_gps_trans_loss += gps_trans_loss.item()
         
         # Update progress bar
         progress_bar.set_postfix({
             'loss': f"{loss.item():.4f}",
             'rot_loss': f"{rot_loss.item():.4f}",
             'trans_loss': f"{trans_loss.item():.4f}",
-            'depth_loss': f"{depth_trans_loss.item():.4f}"
+            'depth_loss': f"{depth_trans_loss.item():.4f}",
+            'gps_loss': f"{gps_trans_loss.item():.4f}"
         })
     
     # Calculate average losses
@@ -99,6 +110,7 @@ def train_epoch(model, dataloader, optimizer, device, use_imu=True):
     avg_rot_loss = total_rot_loss / len(dataloader)
     avg_trans_loss = total_trans_loss / len(dataloader)
     avg_depth_trans_loss = total_depth_trans_loss / len(dataloader)
+    avg_gps_trans_loss = total_gps_trans_loss / len(dataloader)
     std_loss = np.std(losses)
     
     # Log gradient information
@@ -110,22 +122,27 @@ def train_epoch(model, dataloader, optimizer, device, use_imu=True):
             grad_info.append(f"Visual grad norm: {visual_grad_norm:.4f}")
         if depth_grad_norm > 0:
             grad_info.append(f"Depth grad norm: {depth_grad_norm:.4f}")
+        if gps_grad_norm > 0:
+            grad_info.append(f"GPS grad norm: {gps_grad_norm:.4f}")
         if imu_grad_norm > 0 and visual_grad_norm > 0:
             grad_info.append(f"IMU/Visual ratio: {imu_grad_norm/visual_grad_norm:.4f}")
         if depth_grad_norm > 0 and visual_grad_norm > 0:
             grad_info.append(f"Depth/Visual ratio: {depth_grad_norm/visual_grad_norm:.4f}")
+        if gps_grad_norm > 0 and visual_grad_norm > 0:
+            grad_info.append(f"GPS/Visual ratio: {gps_grad_norm/visual_grad_norm:.4f}")
         if grad_info:
             logger.info(", ".join(grad_info))
     
-    return avg_loss, avg_rot_loss, avg_trans_loss, avg_depth_trans_loss, std_loss
+    return avg_loss, avg_rot_loss, avg_trans_loss, avg_depth_trans_loss, avg_gps_trans_loss, std_loss
 
-def validate(model, dataloader, device, use_imu=True, visualize=False, log_dir=None):
+def validate(model, dataloader, device, visualize=False, log_dir=None):
     """Validate the model on validation data."""
     model.eval()
     total_loss = 0.0
     total_rot_loss = 0.0
     total_trans_loss = 0.0
     total_depth_trans_loss = 0.0
+    total_gps_trans_loss = 0.0
     losses = []
     
     # ATE and RPE metrics
@@ -156,18 +173,23 @@ def validate(model, dataloader, device, use_imu=True, visualize=False, log_dir=N
                 idx += 1
             
             imu_data = None
-            if use_imu:
+            if par.use_imu:
                 imu_data = data[idx].to(device)
+                idx += 1
+            
+            gps_data = None
+            if par.use_gps:
+                gps_data = data[idx].to(device)
                 idx += 1
             
             rel_poses = data[idx].to(device)
             abs_poses = data[idx+1].to(device)
             
             # Forward pass
-            pred_rel_poses = model(rgb_seq, depth=depth_seq, imu_data=imu_data)
+            pred_rel_poses = model(rgb_seq, depth=depth_seq, imu_data=imu_data, gps_data=gps_data)
             
             # Compute loss
-            loss, rot_loss, trans_loss, depth_trans_loss = model.get_loss(pred_rel_poses, rel_poses)
+            loss, rot_loss, trans_loss, depth_trans_loss, gps_trans_loss = model.get_loss(pred_rel_poses, rel_poses)
             losses.append(loss.item())
             
             # Update statistics
@@ -175,6 +197,7 @@ def validate(model, dataloader, device, use_imu=True, visualize=False, log_dir=N
             total_rot_loss += rot_loss.item()
             total_trans_loss += trans_loss.item()
             total_depth_trans_loss += depth_trans_loss.item()
+            total_gps_trans_loss += gps_trans_loss.item()
             
             # Compute trajectory and metrics
             for i in range(len(rgb_seq)):
@@ -217,7 +240,8 @@ def validate(model, dataloader, device, use_imu=True, visualize=False, log_dir=N
                 'loss': f"{loss.item():.4f}",
                 'rot_loss': f"{rot_loss.item():.4f}",
                 'trans_loss': f"{trans_loss.item():.4f}",
-                'depth_loss': f"{depth_trans_loss.item():.4f}"
+                'depth_loss': f"{depth_trans_loss.item():.4f}",
+                'gps_loss': f"{gps_trans_loss.item():.4f}"
             })
     
     # Calculate average losses
@@ -225,6 +249,7 @@ def validate(model, dataloader, device, use_imu=True, visualize=False, log_dir=N
     avg_rot_loss = total_rot_loss / len(dataloader)
     avg_trans_loss = total_trans_loss / len(dataloader)
     avg_depth_trans_loss = total_depth_trans_loss / len(dataloader)
+    avg_gps_trans_loss = total_gps_trans_loss / len(dataloader)
     std_loss = np.std(losses)
     
     # Calculate average metrics
@@ -242,19 +267,22 @@ def validate(model, dataloader, device, use_imu=True, visualize=False, log_dir=N
         'rpe_trans_std': avg_rpe_trans_std,
         'rpe_rot_mean': avg_rpe_rot_mean,
         'rpe_rot_std': avg_rpe_rot_std,
-        'depth_trans_loss': avg_depth_trans_loss
+        'depth_trans_loss': avg_depth_trans_loss,
+        'gps_trans_loss': avg_gps_trans_loss
     }
     
     # Visualize best and worst trajectories if requested
     if visualize and log_dir is not None:
-        imu_suffix = "_with_imu" if use_imu else ""
+        imu_suffix = "_with_imu" if par.use_imu else ""
+        gps_suffix = "_with_gps" if par.use_gps else ""
+        depth_suffix = "_with_depth" if par.use_depth else ""
         
         # Best trajectory
         fig_best, _ = visualize_trajectory(
             best_traj['pred'], 
             best_traj['gt'], 
             title=f"Best Trajectory (ATE: {best_traj['error']:.4f}m, ID: {best_traj['idx']})", 
-            save_path=os.path.join(log_dir, f"best_trajectory{imu_suffix}.png")
+            save_path=os.path.join(log_dir, f"best_trajectory{imu_suffix}{gps_suffix}{depth_suffix}.png")
         )
         
         # Worst trajectory
@@ -262,16 +290,16 @@ def validate(model, dataloader, device, use_imu=True, visualize=False, log_dir=N
             worst_traj['pred'], 
             worst_traj['gt'], 
             title=f"Worst Trajectory (ATE: {worst_traj['error']:.4f}m, ID: {best_traj['idx']})", 
-            save_path=os.path.join(log_dir, f"worst_trajectory{imu_suffix}.png")
+            save_path=os.path.join(log_dir, f"worst_trajectory{imu_suffix}{gps_suffix}{depth_suffix}.png")
         )
         
         # Close figures to prevent memory issues
         plt.close(fig_best)
         plt.close(fig_worst)
     
-    return avg_loss, avg_rot_loss, avg_trans_loss, avg_depth_trans_loss, std_loss, metrics
+    return avg_loss, avg_rot_loss, avg_trans_loss, avg_depth_trans_loss, avg_gps_trans_loss, std_loss, metrics
 
-def train(use_imu=True, use_integrated_imu=True, batch_size=None, learning_rate=None):
+def train(use_imu=True, use_integrated_imu=True, use_gps=True, use_depth=True, batch_size=None, learning_rate=None):
     """Main training function."""
     # Set device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -287,33 +315,41 @@ def train(use_imu=True, use_integrated_imu=True, batch_size=None, learning_rate=
     # Model configuration
     imu_suffix = "_with_imu" if use_imu else ""
     integrated_suffix = "_integrated" if use_integrated_imu else ""
-    run_name = f"rgbvo{imu_suffix}{integrated_suffix}-{time.strftime('%Y%m%d-%H%M%S')}"
+    gps_suffix = "_with_gps" if use_gps else ""
+    depth_suffix = "_with_depth" if use_depth else ""
+    run_name = f"rgbvo{imu_suffix}{integrated_suffix}{gps_suffix}{depth_suffix}-{time.strftime('%Y%m%d-%H%M%S')}"
     
     # Initialize wandb
-    wandb.init(project="rgbvo", name=run_name)
+    wandb.init(project="New-Multi-LSTMS", name=run_name)
     
     # Log parameters
     wandb.config.update(vars(par))
     wandb.config.update({
         "use_imu": use_imu,
         "use_integrated_imu": use_integrated_imu,
+        "use_gps": use_gps,
+        "use_depth": use_depth,
         "batch_size": par.batch_size,
         "learning_rate": par.optim['lr']
     })
     
-    # Create data loaders with IMU support
+    # Create data loaders with all modalities
     train_loader, val_loader = create_data_loaders(
         batch_size=par.batch_size,
         use_imu=use_imu,
-        use_integrated_imu=use_integrated_imu
+        use_integrated_imu=use_integrated_imu,
+        use_depth=use_depth
     )
     logger.info(f"Training with {len(train_loader)} batches, validating with {len(val_loader)} batches")
     logger.info(f"Using IMU data: {use_imu} (Integrated: {use_integrated_imu})")
+    logger.info(f"Using GPS data: {use_gps}")
+    logger.info(f"Using Depth data: {use_depth}")
     
     # Determine IMU input size based on integration mode
     imu_input_size = 21 if use_integrated_imu else 6
     
-    # Create visual-inertial odometry model
+    # Create visual-inertial odometry model with all modalities
+    logger.info("Creating model with all modalities...")
     try:
         model = VisualInertialOdometryModel(
             imsize1=par.img_h, 
@@ -322,20 +358,32 @@ def train(use_imu=True, use_integrated_imu=True, batch_size=None, learning_rate=
             use_imu=use_imu,
             imu_feature_size=512,
             imu_input_size=imu_input_size,
+            use_gps=use_gps,
+            gps_feature_size=512,
+            gps_input_size=9,
             use_adaptive_weighting=True,
-            use_depth_translation=False,
-            pretrained_depth_path=par.pretrained_depth if par.use_depth else None
+            use_depth=use_depth,
+            use_depth_temporal=use_depth,
+            use_depth_translation=use_depth,
+            use_gps_temporal=use_gps,
+            pretrained_depth_path=par.pretrained_depth if use_depth else None
         )
+        logger.info("Model created successfully with all modalities.")
     except TypeError as e:
         logger.warning(f"Model initialization error: {e}")
-        logger.info("Retrying with reduced parameters...")
+        logger.info("Retrying with reduced parameters but keeping all modality flags...")
         model = VisualInertialOdometryModel(
             imsize1=par.img_h, 
             imsize2=par.img_w, 
             batchNorm=par.batch_norm,
             use_imu=use_imu,
-            pretrained_depth_path=par.pretrained_depth if par.use_depth else None
+            use_gps=use_gps,
+            use_depth=use_depth,
+            use_depth_temporal=use_depth,
+            use_depth_translation=use_depth,
+            pretrained_depth_path=par.pretrained_depth if use_depth else None
         )
+        logger.info("Model created with reduced parameters.")
     
     model = model.to(device)
     
@@ -363,8 +411,8 @@ def train(use_imu=True, use_integrated_imu=True, batch_size=None, learning_rate=
         verbose=True
     )
     
-    # Update model path with suffix
-    par.model_name = f"{par.model_name}{imu_suffix}{integrated_suffix}"
+    # Update model path with suffix for all modalities
+    par.model_name = f"{par.model_name}{imu_suffix}{integrated_suffix}{gps_suffix}{depth_suffix}"
     par.model_path = os.path.join(par.model_dir, f"{par.model_name}.pt")
     
     # Ensure log directory exists
@@ -383,25 +431,27 @@ def train(use_imu=True, use_integrated_imu=True, batch_size=None, learning_rate=
     val_losses = []
     val_ates = []
     depth_trans_losses = []
+    gps_trans_losses = []
     
     # Train for specified number of epochs
     for epoch in range(par.epochs):
         logger.info(f"Epoch {epoch+1}/{par.epochs}")
         
         # Train
-        train_loss, train_rot_loss, train_trans_loss, train_depth_trans_loss, train_loss_std = train_epoch(
-            model, train_loader, optimizer, device, use_imu=use_imu
+        train_loss, train_rot_loss, train_trans_loss, train_depth_trans_loss, train_gps_trans_loss, train_loss_std = train_epoch(
+            model, train_loader, optimizer, device
         )
         train_losses.append(train_loss)
         
         # Validate
         visualize_epoch = (epoch + 1) % 10 == 0 or epoch == par.epochs - 1
-        val_loss, val_rot_loss, val_trans_loss, val_depth_trans_loss, val_loss_std, metrics = validate(
-            model, val_loader, device, use_imu=use_imu, visualize=visualize_epoch, log_dir=par.log_dir
+        val_loss, val_rot_loss, val_trans_loss, val_depth_trans_loss, val_gps_trans_loss, val_loss_std, metrics = validate(
+            model, val_loader, device, visualize=visualize_epoch, log_dir=par.log_dir
         )
         val_losses.append(val_loss)
         val_ates.append(metrics['ate_mean'])
         depth_trans_losses.append(val_depth_trans_loss)
+        gps_trans_losses.append(val_gps_trans_loss)
         
         # Update scheduler
         scheduler.step(val_loss)
@@ -414,11 +464,13 @@ def train(use_imu=True, use_integrated_imu=True, batch_size=None, learning_rate=
             'train_rot_loss': train_rot_loss,
             'train_trans_loss': train_trans_loss,
             'train_depth_trans_loss': train_depth_trans_loss,
+            'train_gps_trans_loss': train_gps_trans_loss,
             'val_loss_mean': val_loss,
             'val_loss_std': val_loss_std,
             'val_rot_loss': val_rot_loss,
             'val_trans_loss': val_trans_loss,
             'val_depth_trans_loss': val_depth_trans_loss,
+            'val_gps_trans_loss': val_gps_trans_loss,
             'learning_rate': optimizer.param_groups[0]['lr'],
             'ate_mean': metrics['ate_mean'],
             'ate_std': metrics['ate_std'],
@@ -432,7 +484,9 @@ def train(use_imu=True, use_integrated_imu=True, batch_size=None, learning_rate=
         logger.info(f"Train Loss: {train_loss:.6f} ± {train_loss_std:.6f}")
         logger.info(f"Val Loss: {val_loss:.6f} ± {val_loss_std:.6f}")
         logger.info(f"Train Depth Trans Loss: {train_depth_trans_loss:.6f}")
+        logger.info(f"Train GPS Trans Loss: {train_gps_trans_loss:.6f}")
         logger.info(f"Val Depth Trans Loss: {val_depth_trans_loss:.6f}")
+        logger.info(f"Val GPS Trans Loss: {val_gps_trans_loss:.6f}")
         logger.info(f"ATE: {metrics['ate_mean']:.4f} ± {metrics['ate_std']:.4f} m")
         logger.info(f"RPE Trans: {metrics['rpe_trans_mean']:.4f} ± {metrics['rpe_trans_std']:.4f} m")
         logger.info(f"RPE Rot: {metrics['rpe_rot_mean']:.4f} ± {metrics['rpe_rot_std']:.4f} rad")
@@ -460,18 +514,18 @@ def train(use_imu=True, use_integrated_imu=True, batch_size=None, learning_rate=
             plt.figure(figsize=(12, 12))
             
             # Loss plot
-            plt.subplot(3, 1, 1)
+            plt.subplot(4, 1, 1)
             plt.plot(range(1, len(train_losses) + 1), train_losses, marker='o', label='Training Loss')
             plt.plot(range(1, len(val_losses) + 1), val_losses, marker='x', label='Validation Loss')
             plt.axhline(y=best_val_loss, color='r', linestyle='--', label=f'Best Val Loss: {best_val_loss:.6f}')
             plt.xlabel('Epoch')
             plt.ylabel('Loss')
-            plt.title(f'Training and Validation Loss ({"with" if use_imu else "without"} IMU)')
+            plt.title(f'Training and Validation Loss (IMU: {use_imu}, GPS: {use_gps}, Depth: {use_depth})')
             plt.legend()
             plt.grid(True)
             
             # ATE plot
-            plt.subplot(3, 1, 2)
+            plt.subplot(4, 1, 2)
             plt.plot(range(1, len(val_ates) + 1), val_ates, marker='s', color='green', label='ATE')
             plt.axhline(y=best_ate, color='r', linestyle='--', label=f'Best ATE: {best_ate:.4f}m')
             plt.xlabel('Epoch')
@@ -481,11 +535,20 @@ def train(use_imu=True, use_integrated_imu=True, batch_size=None, learning_rate=
             plt.grid(True)
             
             # Depth Translation Loss plot
-            plt.subplot(3, 1, 3)
+            plt.subplot(4, 1, 3)
             plt.plot(range(1, len(depth_trans_losses) + 1), depth_trans_losses, marker='d', color='purple', label='Depth Trans Loss')
             plt.xlabel('Epoch')
             plt.ylabel('Depth Translation Loss')
             plt.title('Depth-Supervised Translation Loss')
+            plt.legend()
+            plt.grid(True)
+            
+            # GPS Translation Loss plot
+            plt.subplot(4, 1, 4)
+            plt.plot(range(1, len(gps_trans_losses) + 1), gps_trans_losses, marker='^', color='blue', label='GPS Trans Loss')
+            plt.xlabel('Epoch')
+            plt.ylabel('GPS Translation Loss')
+            plt.title('GPS-Supervised Translation Loss')
             plt.legend()
             plt.grid(True)
             
@@ -505,11 +568,13 @@ def train(use_imu=True, use_integrated_imu=True, batch_size=None, learning_rate=
     
     return best_val_loss, best_ate
 
-def test(model_path, use_imu=True, use_integrated_imu=True, batch_size=None):
+def test(model_path, use_imu=True, use_integrated_imu=True, use_gps=True, use_depth=True, batch_size=None):
     """Test trained model on test data."""
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logger.info(f"Testing model: {model_path}")
     logger.info(f"Using IMU: {use_imu} (Integrated: {use_integrated_imu})")
+    logger.info(f"Using GPS: {use_gps}")
+    logger.info(f"Using Depth: {use_depth}")
     
     # Use provided batch size or default
     if batch_size is not None:
@@ -521,13 +586,14 @@ def test(model_path, use_imu=True, use_integrated_imu=True, batch_size=None):
     _, test_loader = create_data_loaders(
         batch_size=test_batch_size,
         use_imu=use_imu,
-        use_integrated_imu=use_integrated_imu
+        use_integrated_imu=use_integrated_imu,
+        use_depth=use_depth
     )
     
     # Determine IMU input size based on integration mode
     imu_input_size = 21 if use_integrated_imu else 6
     
-    # Create model
+    # Create model with all modalities enabled
     try:
         model = VisualInertialOdometryModel(
             imsize1=par.img_h, 
@@ -536,19 +602,29 @@ def test(model_path, use_imu=True, use_integrated_imu=True, batch_size=None):
             use_imu=use_imu,
             imu_feature_size=128,
             imu_input_size=imu_input_size,
+            use_gps=use_gps,
+            gps_feature_size=128,
+            gps_input_size=9,
             use_adaptive_weighting=True,
-            use_depth_translation=True,
-            pretrained_depth_path=par.pretrained_depth if par.use_depth else None
+            use_depth=use_depth,
+            use_depth_temporal=use_depth,
+            use_depth_translation=use_depth,
+            use_gps_temporal=use_gps,
+            pretrained_depth_path=par.pretrained_depth if use_depth else None
         )
     except TypeError as e:
         logger.warning(f"Model initialization error: {e}")
-        logger.info("Retrying with reduced parameters...")
+        logger.info("Retrying with reduced parameters but keeping modality flags...")
         model = VisualInertialOdometryModel(
             imsize1=par.img_h, 
             imsize2=par.img_w, 
             batchNorm=par.batch_norm,
             use_imu=use_imu,
-            pretrained_depth_path=par.pretrained_depth if par.use_depth else None
+            use_gps=use_gps,
+            use_depth=use_depth,
+            use_depth_temporal=use_depth,
+            use_depth_translation=use_depth,
+            pretrained_depth_path=par.pretrained_depth if use_depth else None
         )
     
     # Load trained weights
@@ -557,11 +633,10 @@ def test(model_path, use_imu=True, use_integrated_imu=True, batch_size=None):
     model.eval()
     
     # Run validation as test
-    _, _, _, _, _, metrics = validate(
+    _, _, _, _, _, _, metrics = validate(
         model, 
         test_loader, 
         device, 
-        use_imu=use_imu, 
         visualize=True, 
         log_dir=par.log_dir
     )
@@ -572,6 +647,7 @@ def test(model_path, use_imu=True, use_integrated_imu=True, batch_size=None):
     logger.info(f"RPE Trans: {metrics['rpe_trans_mean']:.4f} ± {metrics['rpe_trans_std']:.4f} m")
     logger.info(f"RPE Rot: {metrics['rpe_rot_mean']:.4f} ± {metrics['rpe_rot_std']:.4f} rad")
     logger.info(f"Depth Translation Loss: {metrics['depth_trans_loss']:.6f}")
+    logger.info(f"GPS Translation Loss: {metrics['gps_trans_loss']:.6f}")
     
     return metrics
 
@@ -580,22 +656,28 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Visual-Inertial Odometry Training')
     parser.add_argument('--no_imu', action='store_true', help='Disable IMU usage')
     parser.add_argument('--raw_imu', action='store_true', help='Use raw IMU data instead of integrated features')
+    parser.add_argument('--no_gps', action='store_true', help='Disable GPS usage')
+    parser.add_argument('--no_depth', action='store_true', help='Disable Depth usage')
     parser.add_argument('--batch_size', type=int, help='Override batch size')
     parser.add_argument('--lr', type=float, help='Override learning rate')
     parser.add_argument('--test', action='store_true', help='Run test instead of training')
     parser.add_argument('--model_path', type=str, help='Path to model for testing')
     args = parser.parse_args()
     
-    # Determine IMU usage
+    # Determine modality usage
     use_imu = not args.no_imu
     use_integrated_imu = not args.raw_imu
+    use_gps = not args.no_gps
+    use_depth = not args.no_depth
     
     if args.test:
         # Run test mode
         if args.model_path is None:
             imu_suffix = "_with_imu" if use_imu else ""
             integrated_suffix = "_integrated" if use_integrated_imu else ""
-            model_name = f"{par.model_name}{imu_suffix}{integrated_suffix}"
+            gps_suffix = "_with_gps" if use_gps else ""
+            depth_suffix = "_with_depth" if use_depth else ""
+            model_name = f"{par.model_name}{imu_suffix}{integrated_suffix}{gps_suffix}{depth_suffix}"
             model_path = os.path.join(par.model_dir, f"{model_name}.pt")
         else:
             model_path = args.model_path
@@ -605,6 +687,8 @@ if __name__ == "__main__":
             model_path=model_path,
             use_imu=use_imu,
             use_integrated_imu=use_integrated_imu,
+            use_gps=use_gps,
+            use_depth=use_depth,
             batch_size=args.batch_size
         )
     else:
@@ -612,6 +696,8 @@ if __name__ == "__main__":
         train(
             use_imu=use_imu,
             use_integrated_imu=use_integrated_imu,
+            use_gps=use_gps,
+            use_depth=use_depth,
             batch_size=args.batch_size,
             learning_rate=args.lr
         )

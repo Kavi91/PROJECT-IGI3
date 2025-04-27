@@ -3,6 +3,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import numpy as np
+
 class IMUPreprocessor:
     """
     Preprocesses IMU data by applying bias correction and integration.
@@ -14,7 +19,8 @@ class IMUPreprocessor:
                  apply_integration=True,
                  dt=0.04,  # 25Hz (1/25 = 0.04s)
                  gravity=9.81,
-                 body_to_camera=None):
+                 body_to_camera=None,
+                 body_to_camera_translation=None):
         """
         Args:
             gyro_bias_init: Initial gyroscope bias estimate [3]
@@ -23,6 +29,7 @@ class IMUPreprocessor:
             dt: Time step between IMU measurements in seconds (now 0.04 for 25Hz)
             gravity: Gravity constant
             body_to_camera: 3x3 rotation matrix for body-to-camera transformation
+            body_to_camera_translation: 3D translation vector from body to camera (in meters)
         """
         self.gyro_bias = gyro_bias_init if gyro_bias_init is not None else np.zeros(3)
         self.acc_bias = acc_bias_init if acc_bias_init is not None else np.zeros(3)
@@ -33,6 +40,9 @@ class IMUPreprocessor:
         # Body to camera transformation (default is identity)
         self.body_to_camera = body_to_camera if body_to_camera is not None else np.eye(3)
         self.camera_to_body = np.linalg.inv(self.body_to_camera)
+        
+        # Body to camera translation (default is zero)
+        self.body_to_camera_translation = body_to_camera_translation if body_to_camera_translation is not None else np.zeros(3)
         
         # Gravity vector in world frame (assuming NED: North-East-Down)
         self.g_w = np.array([0, 0, gravity])
@@ -55,15 +65,20 @@ class IMUPreprocessor:
         corrected[:, 0:3] -= self.acc_bias
         corrected[:, 3:6] -= self.gyro_bias
         
-        # Transform from body to camera frame if needed (only if not identity)
-        if not np.allclose(self.body_to_camera, np.eye(3)):
-            for i in range(corrected.shape[0]):
-                # Transform accelerometer data
-                corrected[i, 0:3] = self.body_to_camera @ corrected[i, 0:3]
-                # Transform gyroscope data
-                corrected[i, 3:6] = self.body_to_camera @ corrected[i, 3:6]
+        # No need to transform if data is already in the correct frame
+        # or if transformation matrix is identity
+        if np.allclose(self.body_to_camera, np.eye(3)):
+            return corrected
+            
+        # Transform from body to camera frame
+        transformed = np.zeros_like(corrected)
+        for i in range(corrected.shape[0]):
+            # Transform accelerometer data
+            transformed[i, 0:3] = self.body_to_camera @ corrected[i, 0:3]
+            # Transform gyroscope data
+            transformed[i, 3:6] = self.body_to_camera @ corrected[i, 3:6]
         
-        return corrected
+        return transformed
     
     def integrate_imu(self, imu_data, initial_orientation=None, initial_velocity=None, initial_position=None):
         """
@@ -99,6 +114,9 @@ class IMUPreprocessor:
             
         if initial_position is not None:
             positions[0] = initial_position
+        else:
+            # Adjust initial position to account for the camera's offset from the body frame
+            positions[0] = self.body_to_camera_translation
         
         # Integrate
         for i in range(1, seq_len):
@@ -258,6 +276,29 @@ class IMUFeatureExtractor(nn.Module):
             nn.LeakyReLU(0.1)
         )
         
+    # def forward(self, imu_features):
+    #     """
+    #     Process IMU features.
+        
+    #     Args:
+    #         imu_features: Tensor of shape [batch_size, seq_len, input_size]
+        
+    #     Returns:
+    #         IMU features of shape [batch_size, seq_len, output_size]
+    #     """
+    #     batch_size, seq_len, _ = imu_features.shape
+        
+    #     # Reshape for batch processing
+    #     x = imu_features.view(-1, self.input_size)
+        
+    #     # Extract features
+    #     x = self.encoder(x)
+        
+    #     # Reshape back
+    #     x = x.view(batch_size, seq_len, self.output_size)
+        
+    #     return x
+
     def forward(self, imu_features):
         """
         Process IMU features.
@@ -268,16 +309,20 @@ class IMUFeatureExtractor(nn.Module):
         Returns:
             IMU features of shape [batch_size, seq_len, output_size]
         """
-        batch_size, seq_len, _ = imu_features.shape
+        batch_size, seq_len, input_features = imu_features.shape
         
-        # Reshape for batch processing
-        x = imu_features.view(-1, self.input_size)
+        # Process each sequence element separately to avoid reshape errors
+        output_features = []
+        for i in range(seq_len):
+            # Get features for this timestep
+            timestep_features = imu_features[:, i, :]  # [batch_size, input_size]
+            
+            # Process through encoder
+            processed = self.encoder(timestep_features)  # [batch_size, output_size]
+            output_features.append(processed)
         
-        # Extract features
-        x = self.encoder(x)
-        
-        # Reshape back
-        x = x.view(batch_size, seq_len, self.output_size)
+        # Stack along sequence dimension
+        x = torch.stack(output_features, dim=1)  # [batch_size, seq_len, output_size]
         
         return x
 

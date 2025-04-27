@@ -1,996 +1,718 @@
+#!/usr/bin/env python3
+"""
+Optimized Visual-Inertial Odometry Test Script
+
+Features:
+- Flexible trajectory integration with configurable parameters
+- Automatic scaling factor optimization
+- Proper coordinate frame handling
+- Comprehensive visualization and metrics
+"""
+
 import os
+import sys
+import argparse
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
-from tqdm import tqdm
-import argparse
-import logging
-import glob
+from scipy.spatial.transform import Rotation
 from PIL import Image
-from torchvision import transforms
-from scipy.spatial.transform import Rotation as R
-
-from params import par
-from model import RGBVO
-from helper import relative_to_absolute_pose, compute_ate, compute_rpe
-from data_helper import TartanAirDataset
+import torchvision.transforms as transforms
+import logging
+from tqdm import tqdm
+import json
+import time
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def euler_to_quaternion(roll, pitch, yaw):
-    """
-    Convert Euler angles to quaternion.
-    
-    Args:
-        roll, pitch, yaw: Rotation angles in radians
-    
-    Returns:
-        qx, qy, qz, qw: Quaternion components
-    """
-    # Use scipy's Rotation class for reliable conversion
-    r = R.from_euler('xyz', [roll, pitch, yaw])
-    quat = r.as_quat()  # Returns [x, y, z, w]
-    return quat
+# Import your model and parameters
+from model_2 import VisualInertialOdometryModel
+from params import par
 
-def quaternion_to_rotation_matrix(qx, qy, qz, qw):
-    """Convert quaternion to rotation matrix."""
-    # Create rotation matrix
-    rotation = np.zeros((3, 3))
-    
-    # First row
-    rotation[0, 0] = 1 - 2*qy*qy - 2*qz*qz
-    rotation[0, 1] = 2*qx*qy - 2*qz*qw
-    rotation[0, 2] = 2*qx*qz + 2*qy*qw
-    
-    # Second row
-    rotation[1, 0] = 2*qx*qy + 2*qz*qw
-    rotation[1, 1] = 1 - 2*qx*qx - 2*qz*qz
-    rotation[1, 2] = 2*qy*qz - 2*qx*qw
-    
-    # Third row
-    rotation[2, 0] = 2*qx*qz - 2*qy*qw
-    rotation[2, 1] = 2*qy*qz + 2*qx*qw
-    rotation[2, 2] = 1 - 2*qx*qx - 2*qy*qy
-    
-    return rotation
-
-def normalize_quaternion(q):
-    """
-    Normalize a quaternion to unit length.
-    
-    Args:
-        q: Quaternion [qx, qy, qz, qw]
-    
-    Returns:
-        Normalized quaternion
-    """
-    norm = np.sqrt(np.sum(q**2))
-    if norm < 1e-10:
-        return np.array([0.0, 0.0, 0.0, 1.0])  # Identity quaternion
-    return q / norm
-
-def align_and_scale_trajectory(pred_positions, gt_positions):
-    """
-    Align and scale predicted trajectory to match ground truth with direction-specific scaling.
-    
-    Args:
-        pred_positions: Predicted positions [N, 3]
-        gt_positions: Ground truth positions [M, 3]
-    
-    Returns:
-        aligned_positions: Aligned and scaled predicted positions
-    """
-    # Make sure we have valid inputs
-    if len(pred_positions) < 2 or len(gt_positions) < 2:
-        logger.warning("Cannot align/scale trajectory with less than 2 points")
-        return pred_positions
-    
-    # 1. Translate to match start point exactly
-    aligned_positions = pred_positions - pred_positions[0] + gt_positions[0]
-    
-    # 2. Log overall path length info (for reference)
-    gt_segments = np.diff(gt_positions, axis=0)
-    gt_distances = np.sqrt(np.sum(gt_segments**2, axis=1))
-    gt_path_length = np.sum(gt_distances)
-    
-    pred_segments = np.diff(aligned_positions, axis=0)
-    pred_distances = np.sqrt(np.sum(pred_segments**2, axis=1))
-    pred_path_length = np.sum(pred_distances)
-    
-    logger.info(f"Path length before direction scaling - GT: {gt_path_length:.2f}m, Pred: {pred_path_length:.2f}m")
-    
-    # 3. Apply direction-specific scaling
-    for dim in range(3):
-        dim_name = ['X', 'Y', 'Z'][dim]
-        # Calculate scale factor for this dimension
-        gt_range = np.max(gt_positions[:, dim]) - np.min(gt_positions[:, dim])
-        pred_range = np.max(aligned_positions[:, dim]) - np.min(aligned_positions[:, dim])
-        
-        if pred_range > 1e-6:  # Avoid division by zero
-            dim_scale = gt_range / pred_range
-            # Apply scale factor only to this dimension
-            aligned_positions[:, dim] = gt_positions[0, dim] + (aligned_positions[:, dim] - aligned_positions[0, dim]) * dim_scale
-            logger.info(f"{dim_name}-dimension scale factor: {dim_scale:.4f} (GT range: {gt_range:.2f}m, Pred range: {pred_range:.2f}m)")
-        else:
-            logger.warning(f"{dim_name}-dimension range is too small, skipping scaling")
-    
-    # 4. Special handling for Z-dimension if needed (uncomment if Z drift is still excessive)
-    # z_variation_factor = 0.1  # Reduce Z variation by 90%
-    # mean_z = gt_positions[0, 2]  # Use starting Z as reference
-    # aligned_positions[:, 2] = mean_z + (aligned_positions[:, 2] - mean_z) * z_variation_factor
-    # logger.info(f"Applied additional Z constraint factor: {z_variation_factor}")
-    
-    return aligned_positions
-
-def test_trajectory(model, trajectory, device, output_dir):
-    """
-    Test model on a specific trajectory.
-    
-    Args:
-        model: Trained RGBVO model
-        trajectory: Tuple of (environment, difficulty, trajectory_id)
-        device: Device to run inference on
-        output_dir: Directory to save outputs
-    
-    Returns:
-        dict: Metrics for this trajectory
-    """
-    env, difficulty, trajectory_id = trajectory
-    logger.info(f"Testing on trajectory: {env}/{difficulty}/{trajectory_id}")
-    
-    # Create dataset for this trajectory only
-    dataset = TartanAirDataset([trajectory], is_training=False)
-    if len(dataset) == 0:
-        logger.warning(f"No sequences found for {env}/{difficulty}/{trajectory_id}")
-        return None
-    
-    # Create directories for outputs
-    trajectory_dir = os.path.join(output_dir, f"{env}_{difficulty}_{trajectory_id}")
-    os.makedirs(trajectory_dir, exist_ok=True)
-    
-    model.eval()
-    
-    # Get transformation parameters
-    body_to_camera_rotation = par.body_to_camera_rotation.to(device)
-    body_to_camera_translation = par.body_to_camera_translation.to(device)
-    
-    # Metrics for all sequences
-    all_ate_mean = []
-    all_ate_std = []
-    all_rpe_trans_mean = []
-    all_rpe_trans_std = []
-    all_rpe_rot_mean = []
-    all_rpe_rot_std = []
-    
-    # Lists to store all predictions and ground truth
-    all_pred_rel_poses = []
-    all_gt_abs_poses = []
-    
-    # Lists to store full trajectory data (concatenating all sequences)
-    full_pred_trajectory = []
-    full_gt_trajectory = []
-    
-    # Process all sequences in this trajectory
-    with torch.no_grad():
-        for i, (rgb_seq, rel_poses, abs_poses) in enumerate(tqdm(dataset, desc="Testing sequences")):
-            # Prepare data
-            rgb_seq = rgb_seq.unsqueeze(0).to(device)  # Add batch dimension
-            rel_poses = rel_poses.unsqueeze(0).to(device)
-            abs_poses = abs_poses.unsqueeze(0).to(device)
-            
-            # Forward pass
-            pred_rel_poses = model(rgb_seq)
-            
-            # Compute loss
-            loss, rot_loss, trans_loss = model.get_loss(pred_rel_poses, rel_poses)
-            
-            # Integrate to absolute trajectory for this sequence
-            pred_abs_poses = relative_to_absolute_pose(
-                pred_rel_poses[0], 
-                body_to_camera_rotation, 
-                body_to_camera_translation
-            )
-            gt_abs_poses = abs_poses[0]
-            
-            # Store predictions and ground truth for metrics
-            all_pred_rel_poses.append(pred_rel_poses[0].cpu().numpy())
-            all_gt_abs_poses.append(gt_abs_poses.cpu().numpy())
-            
-            # Add to full trajectory (for end-to-end evaluation)
-            # We're collecting sequence by sequence, but will integrate them later
-            full_pred_trajectory.append(pred_abs_poses.cpu().numpy())
-            full_gt_trajectory.append(gt_abs_poses.cpu().numpy())
-            
-            # Compute metrics for this sequence
-            ate_mean, ate_std = compute_ate(pred_abs_poses, gt_abs_poses)
-            rpe_trans_mean, rpe_trans_std, rpe_rot_mean, rpe_rot_std = compute_rpe(pred_abs_poses, gt_abs_poses)
-            
-            all_ate_mean.append(ate_mean)
-            all_ate_std.append(ate_std)
-            all_rpe_trans_mean.append(rpe_trans_mean)
-            all_rpe_trans_std.append(rpe_trans_std)
-            all_rpe_rot_mean.append(rpe_rot_mean)
-            all_rpe_rot_std.append(rpe_rot_std)
-    
-    # Save and process full trajectory
-    if full_pred_trajectory and full_gt_trajectory:
-        try:
-            # Concatenate the full trajectory data
-            full_gt_abs_traj = np.vstack(full_gt_trajectory)
-            full_pred_abs_traj = np.vstack(full_pred_trajectory)
-            
-            # Save raw full trajectory data (without any alignment or scaling)
-            # IMPORTANT: Use space delimiter (not comma) for all trajectory files
-            full_gt_raw_path = os.path.join(trajectory_dir, "full_gt_trajectory_raw.txt")
-            full_pred_raw_path = os.path.join(trajectory_dir, "full_pred_trajectory_raw.txt")
-            np.savetxt(full_gt_raw_path, full_gt_abs_traj, delimiter=' ', fmt='%.18e')
-            np.savetxt(full_pred_raw_path, full_pred_abs_traj, delimiter=' ', fmt='%.18e')
-            
-            logger.info(f"Saved raw full trajectories: GT shape {full_gt_abs_traj.shape}, Pred shape {full_pred_abs_traj.shape}")
-            
-            # Load original ground truth from TartanAir for reference
-            pose_file = os.path.join(par.pose_dir, env, difficulty, trajectory_id, "pose_left.txt")
-            if os.path.exists(pose_file):
-                # Load raw poses (in TartanAir format: tx ty tz qx qy qz qw)
-                raw_gt_poses = np.loadtxt(pose_file)
-                logger.info(f"Loaded original ground truth poses from {pose_file}: {raw_gt_poses.shape} poses")
-                
-                # Save ground truth in TartanAir format
-                pose_gt_path = os.path.join(trajectory_dir, "pose_gt.txt")
-                np.savetxt(pose_gt_path, raw_gt_poses, delimiter=' ', fmt='%.18e')
-                
-                # Extract ground truth positions for plotting
-                gt_positions = raw_gt_poses[:, 0:3]  # tx, ty, tz
-                
-                # Now properly integrate our predicted trajectory from relative poses
-                # This is an alternative approach to get the full trajectory
-                # Use XYZ mapping (identity permutation) based on the permutation test results
-                pred_traj = []
-                current_position = np.zeros(3)
-                current_rotation = np.eye(3)
-                
-                # Process all predicted relative poses sequences
-                for seq_idx, pred_rel_seq in enumerate(all_pred_rel_poses):
-                    for i in range(len(pred_rel_seq)):
-                        # Extract relative pose components
-                        rel_roll, rel_pitch, rel_yaw = pred_rel_seq[i, 0:3]
-                        rel_x, rel_y, rel_z = pred_rel_seq[i, 3:6]
-                        
-                        # Create rotation matrix for relative pose
-                        rel_rotation = R.from_euler('xyz', [rel_roll, rel_pitch, rel_yaw]).as_matrix()
-                        
-                        # Update current rotation
-                        current_rotation = current_rotation @ rel_rotation
-                        
-                        # Create translation vector
-                        rel_translation = np.array([rel_x, rel_y, rel_z])
-                        
-                        # Apply to current position (rotate translation to global frame)
-                        current_position = current_position + current_rotation @ rel_translation
-                        
-                        # Convert rotation to quaternion
-                        r = R.from_matrix(current_rotation)
-                        quat = r.as_quat()  # [x, y, z, w]
-                        
-                        # Normalize the quaternion to ensure unit length
-                        quat = normalize_quaternion(quat)
-                        
-                        # Store in TartanAir format: tx ty tz qx qy qz qw
-                        pred_traj.append(np.concatenate([current_position, quat]))
-                
-                # Convert to numpy array
-                pred_traj = np.array(pred_traj)
-                
-                # Extract predicted positions for alignment and plotting
-                pred_positions = pred_traj[:, 0:3]
-                
-                # Apply improved alignment and scaling
-                aligned_pred_positions = align_and_scale_trajectory(pred_positions, gt_positions)
-                
-                # Create aligned predicted trajectory in TartanAir format
-                aligned_pred_traj = np.copy(pred_traj)
-                aligned_pred_traj[:, 0:3] = aligned_pred_positions
-                
-                # Verify the shape of the trajectories before saving
-                if aligned_pred_traj.shape[1] != 7:
-                    logger.error(f"ERROR: Predicted trajectory has {aligned_pred_traj.shape[1]} columns instead of 7!")
-                    # Fix if possible by padding or truncating
-                    if aligned_pred_traj.shape[1] < 7:
-                        logger.warning("Padding trajectory to 7 columns")
-                        padded = np.zeros((aligned_pred_traj.shape[0], 7))
-                        padded[:, :aligned_pred_traj.shape[1]] = aligned_pred_traj
-                        aligned_pred_traj = padded
-                    else:
-                        logger.warning("Truncating trajectory to 7 columns")
-                        aligned_pred_traj = aligned_pred_traj[:, :7]
-                
-                # Save predicted trajectory in TartanAir format
-                pose_est_path = os.path.join(trajectory_dir, "pose_est.txt")
-                np.savetxt(pose_est_path, aligned_pred_traj, delimiter=' ', fmt='%.18e')
-                
-                # Save the raw (unaligned) predicted trajectory for reference
-                pose_est_raw_path = os.path.join(trajectory_dir, "pose_est_raw.txt")
-                np.savetxt(pose_est_raw_path, pred_traj, delimiter=' ', fmt='%.18e')
-                
-                # Plot trajectories using positions only
-                plot_position_trajectory(
-                    gt_positions,
-                    aligned_pred_positions,
-                    title=f"Trajectory: {env}/{difficulty}/{trajectory_id}",
-                    save_path=os.path.join(trajectory_dir, "full_trajectory_3d.png")
-                )
-                
-                # Plot 2D projections
-                plot_position_trajectory_2d(
-                    gt_positions,
-                    aligned_pred_positions,
-                    title=f"Trajectory: {env}/{difficulty}/{trajectory_id}",
-                    save_path=os.path.join(trajectory_dir, "full_trajectory_2d.png")
-                )
-                
-                # Compute full trajectory metrics
-                full_gt_tensor = torch.tensor(gt_positions).float()
-                full_pred_tensor = torch.tensor(aligned_pred_positions).float()
-                
-                # Trim to same length if needed
-                min_len = min(len(full_gt_tensor), len(full_pred_tensor))
-                full_gt_tensor = full_gt_tensor[:min_len]
-                full_pred_tensor = full_pred_tensor[:min_len]
-                
-                # Create pose tensors with rotation (needed for RPE)
-                full_gt_pose = torch.zeros(min_len, 6)
-                full_pred_pose = torch.zeros(min_len, 6)
-                
-                # Fill in positions
-                full_gt_pose[:, 3:6] = full_gt_tensor
-                full_pred_pose[:, 3:6] = full_pred_tensor
-                
-                # Compute full trajectory metrics
-                full_ate_mean, full_ate_std = compute_ate(full_pred_pose, full_gt_pose)
-                full_rpe_trans_mean, full_rpe_trans_std, full_rpe_rot_mean, full_rpe_rot_std = compute_rpe(full_pred_pose, full_gt_pose)
-                
-                logger.info(f"Full trajectory metrics:")
-                logger.info(f"  Full ATE: {full_ate_mean:.4f} ± {full_ate_std:.4f} m")
-                logger.info(f"  Full RPE Translation: {full_rpe_trans_mean:.4f} ± {full_rpe_trans_std:.4f} m")
-                
-                # Test load the saved pose files to verify they are correctly formatted
-                try:
-                    test_gt = np.loadtxt(pose_gt_path)
-                    test_est = np.loadtxt(pose_est_path)
-                    logger.info(f"Verified pose files - GT: {test_gt.shape}, EST: {test_est.shape}")
-                    
-                    # Check for same length
-                    if test_gt.shape[0] != test_est.shape[0]:
-                        logger.warning(f"WARNING: GT and EST have different lengths - GT: {test_gt.shape[0]}, EST: {test_est.shape[0]}")
-                        
-                        # Trim the longer one to match the shorter one
-                        min_len = min(test_gt.shape[0], test_est.shape[0])
-                        if test_gt.shape[0] > min_len:
-                            logger.info(f"Trimming GT from {test_gt.shape[0]} to {min_len} rows")
-                            test_gt = test_gt[:min_len]
-                            np.savetxt(pose_gt_path, test_gt, delimiter=' ', fmt='%.18e')
-                        
-                        if test_est.shape[0] > min_len:
-                            logger.info(f"Trimming EST from {test_est.shape[0]} to {min_len} rows")
-                            test_est = test_est[:min_len]
-                            np.savetxt(pose_est_path, test_est, delimiter=' ', fmt='%.18e')
-                except Exception as e:
-                    logger.error(f"Error verifying pose files: {e}")
-                
-            else:
-                logger.warning(f"Original ground truth pose file not found: {pose_file}")
-                logger.warning("Using dataset-provided ground truth instead")
-                
-                # Use our concatenated full ground truth trajectory
-                gt_positions = full_gt_abs_traj[:, 3:6]  # Extract positions
-                
-                # Process predicted trajectory (similar to above)
-                pred_traj = []
-                current_position = np.zeros(3)
-                current_rotation = np.eye(3)
-                
-                for seq_idx, pred_rel_seq in enumerate(all_pred_rel_poses):
-                    for i in range(len(pred_rel_seq)):
-                        rel_roll, rel_pitch, rel_yaw = pred_rel_seq[i, 0:3]
-                        rel_x, rel_y, rel_z = pred_rel_seq[i, 3:6]
-                        
-                        rel_rotation = R.from_euler('xyz', [rel_roll, rel_pitch, rel_yaw]).as_matrix()
-                        current_rotation = current_rotation @ rel_rotation
-                        rel_translation = np.array([rel_x, rel_y, rel_z])
-                        current_position = current_position + current_rotation @ rel_translation
-                        
-                        r = R.from_matrix(current_rotation)
-                        quat = r.as_quat()  # [x, y, z, w]
-                        quat = normalize_quaternion(quat)
-                        
-                        pred_traj.append(np.concatenate([current_position, quat]))
-                
-                pred_traj = np.array(pred_traj)
-                
-                # Extract positions for alignment
-                pred_positions = pred_traj[:, 0:3]
-                
-                # Apply improved alignment and scaling
-                aligned_pred_positions = align_and_scale_trajectory(pred_positions, gt_positions)
-                
-                # Convert euler and positions to TartanAir format
-                gt_quaternions = []
-                for i in range(len(full_gt_abs_traj)):
-                    quat = euler_to_quaternion(full_gt_abs_traj[i, 0], full_gt_abs_traj[i, 1], full_gt_abs_traj[i, 2])
-                    quat = normalize_quaternion(quat)
-                    gt_quaternions.append(quat)
-                
-                gt_quaternions = np.array(gt_quaternions)
-                gt_traj = np.concatenate([gt_positions, gt_quaternions], axis=1)
-                
-                # Verify shapes
-                if gt_traj.shape[1] != 7:
-                    logger.error(f"ERROR: GT trajectory has {gt_traj.shape[1]} columns instead of 7!")
-                    # Fix if possible
-                    if gt_traj.shape[1] < 7:
-                        logger.warning("Padding GT trajectory to 7 columns")
-                        padded = np.zeros((gt_traj.shape[0], 7))
-                        padded[:, :gt_traj.shape[1]] = gt_traj
-                        gt_traj = padded
-                    else:
-                        logger.warning("Truncating GT trajectory to 7 columns")
-                        gt_traj = gt_traj[:, :7]
-                
-                # Create aligned predicted trajectory
-                aligned_pred_traj = np.copy(pred_traj)
-                aligned_pred_traj[:, 0:3] = aligned_pred_positions
-                
-                # Make sure trajectories have same length
-                min_len = min(len(gt_traj), len(aligned_pred_traj))
-                gt_traj = gt_traj[:min_len]
-                aligned_pred_traj = aligned_pred_traj[:min_len]
-                
-                # Save full trajectories with space delimiter (not comma)
-                pose_gt_path = os.path.join(trajectory_dir, "pose_gt.txt")
-                pose_est_path = os.path.join(trajectory_dir, "pose_est.txt")
-                pose_est_raw_path = os.path.join(trajectory_dir, "pose_est_raw.txt")
-                
-                np.savetxt(pose_gt_path, gt_traj, delimiter=' ', fmt='%.18e')
-                np.savetxt(pose_est_path, aligned_pred_traj, delimiter=' ', fmt='%.18e')
-                np.savetxt(pose_est_raw_path, pred_traj, delimiter=' ', fmt='%.18e')
-                
-                # Plot trajectories
-                plot_position_trajectory(
-                    gt_positions,
-                    aligned_pred_positions,
-                    title=f"Trajectory: {env}/{difficulty}/{trajectory_id}",
-                    save_path=os.path.join(trajectory_dir, "full_trajectory_3d.png")
-                )
-                
-                plot_position_trajectory_2d(
-                    gt_positions,
-                    aligned_pred_positions,
-                    title=f"Trajectory: {env}/{difficulty}/{trajectory_id}",
-                    save_path=os.path.join(trajectory_dir, "full_trajectory_2d.png")
-                )
-                
-                # Compute full trajectory metrics as above
-                full_gt_tensor = torch.tensor(gt_positions).float()
-                full_pred_tensor = torch.tensor(aligned_pred_positions).float()
-                
-                min_len = min(len(full_gt_tensor), len(full_pred_tensor))
-                full_gt_tensor = full_gt_tensor[:min_len]
-                full_pred_tensor = full_pred_tensor[:min_len]
-                
-                full_gt_pose = torch.zeros(min_len, 6)
-                full_pred_pose = torch.zeros(min_len, 6)
-                
-                full_gt_pose[:, 3:6] = full_gt_tensor
-                full_pred_pose[:, 3:6] = full_pred_tensor
-                
-                full_ate_mean, full_ate_std = compute_ate(full_pred_pose, full_gt_pose)
-                full_rpe_trans_mean, full_rpe_trans_std, full_rpe_rot_mean, full_rpe_rot_std = compute_rpe(full_pred_pose, full_gt_pose)
-                
-                logger.info(f"Full trajectory metrics:")
-                logger.info(f"  Full ATE: {full_ate_mean:.4f} ± {full_ate_std:.4f} m")
-                logger.info(f"  Full RPE Translation: {full_rpe_trans_mean:.4f} ± {full_rpe_trans_std:.4f} m")
-                
-                # Test load the saved pose files to verify they are correctly formatted
-                try:
-                    test_gt = np.loadtxt(pose_gt_path)
-                    test_est = np.loadtxt(pose_est_path)
-                    logger.info(f"Verified pose files - GT: {test_gt.shape}, EST: {test_est.shape}")
-                except Exception as e:
-                    logger.error(f"Error verifying pose files: {e}")
-        
-        except Exception as e:
-            logger.error(f"Error processing full trajectory: {e}")
-            import traceback
-            traceback.print_exc()
-    
-    # Compute average metrics from sequence-level evaluation
-    metrics = {
-        'ate_mean': np.mean(all_ate_mean),
-        'ate_std': np.mean(all_ate_std),
-        'rpe_trans_mean': np.mean(all_rpe_trans_mean),
-        'rpe_trans_std': np.mean(all_rpe_trans_std),
-        'rpe_rot_mean': np.mean(all_rpe_rot_mean),
-        'rpe_rot_std': np.mean(all_rpe_rot_std),
-        'num_sequences': len(all_ate_mean)
-    }
-    
-    # Add full trajectory metrics if available
+def load_image(path):
+    """Load and preprocess an image for model input."""
     try:
-        metrics['full_ate_mean'] = full_ate_mean
-        metrics['full_ate_std'] = full_ate_std
-        metrics['full_rpe_trans_mean'] = full_rpe_trans_mean
-        metrics['full_rpe_trans_std'] = full_rpe_trans_std
-    except:
-        pass
-    
-    # Save metrics
-    metrics_path = os.path.join(trajectory_dir, "metrics.txt")
-    with open(metrics_path, 'w') as f:
-        f.write(f"Trajectory: {env}/{difficulty}/{trajectory_id}\n")
-        f.write(f"Number of sequences: {metrics['num_sequences']}\n")
-        f.write(f"Sequence-level metrics (averaged):\n")
-        f.write(f"  ATE: {metrics['ate_mean']:.4f} ± {metrics['ate_std']:.4f} m\n")
-        f.write(f"  RPE Translation: {metrics['rpe_trans_mean']:.4f} ± {metrics['rpe_trans_std']:.4f} m\n")
-        f.write(f"  RPE Rotation: {metrics['rpe_rot_mean']:.4f} ± {metrics['rpe_rot_std']:.4f} rad\n")
+        img = Image.open(path)
         
-        if 'full_ate_mean' in metrics:
-            f.write(f"\nFull trajectory metrics:\n")
-            f.write(f"  Full ATE: {metrics['full_ate_mean']:.4f} ± {metrics['full_ate_std']:.4f} m\n")
-            f.write(f"  Full RPE Translation: {metrics['full_rpe_trans_mean']:.4f} ± {metrics['full_rpe_trans_std']:.4f} m\n")
-    
-    logger.info(f"Results for {env}/{difficulty}/{trajectory_id}:")
-    logger.info(f"  Number of sequences: {metrics['num_sequences']}")
-    logger.info(f"  ATE: {metrics['ate_mean']:.4f} ± {metrics['ate_std']:.4f} m")
-    logger.info(f"  RPE Translation: {metrics['rpe_trans_mean']:.4f} ± {metrics['rpe_trans_std']:.4f} m")
-    logger.info(f"  RPE Rotation: {metrics['rpe_rot_mean']:.4f} ± {metrics['rpe_rot_std']:.4f} rad")
-    
-    return metrics
+        # Apply transformations
+        transform_ops = [
+            transforms.Resize((par.img_h, par.img_w)),
+            transforms.ToTensor()
+        ]
+        transformer = transforms.Compose(transform_ops)
+        img_tensor = transformer(img)
+        
+        # Apply FlowNet normalization if required
+        if par.minus_point_5:
+            img_tensor = img_tensor - 0.5
+        
+        # Apply normalization
+        normalizer = transforms.Normalize(mean=par.img_means_rgb, std=par.img_stds_rgb)
+        img_tensor = normalizer(img_tensor)
+        
+        return img_tensor
+    except Exception as e:
+        logger.error(f"Error loading image {path}: {e}")
+        return None
 
-def plot_position_trajectory(gt_positions, pred_positions, title="Trajectory", save_path=None):
+def load_depth(path):
+    """Load and preprocess a depth image for model input."""
+    try:
+        # Open depth image
+        depth_img = Image.open(path)
+        
+        # Decode 16-bit float depth map
+        depth_array = np.array(depth_img, dtype=np.uint16)
+        depth_array.dtype = np.float16
+        
+        # Apply MidAir depth processing
+        depth_array = np.clip(depth_array, 1, 1250)  # Clip to valid range
+        # Apply logarithmic normalization
+        depth_array = (np.log(depth_array) - np.log(1)) / (np.log(1250) - np.log(1))
+        # Apply standardization
+        depth_array = (depth_array - par.depth_mean) / par.depth_std
+        
+        # Convert to PIL Image for resizing
+        depth_img = Image.fromarray(depth_array.astype(np.float32))
+        
+        # Resize
+        depth_transform = transforms.Compose([
+            transforms.Resize((par.img_h, par.img_w))
+        ])
+        depth_img = depth_transform(depth_img)
+        
+        # Convert to tensor
+        depth_tensor = transforms.ToTensor()(depth_img)
+        
+        return depth_tensor
+    except Exception as e:
+        logger.error(f"Error loading depth image {path}: {e}")
+        return None
+
+def create_integrated_imu_features(raw_imu_data):
     """
-    Plot 3D trajectory of ground truth and predicted positions.
+    Convert raw IMU data to integrated IMU features.
     
     Args:
-        gt_positions: Ground truth positions [N, 3] (tx, ty, tz)
-        pred_positions: Predicted positions [N, 3] (tx, ty, tz)
-        title: Plot title
-        save_path: Path to save the figure
+        raw_imu_data: Raw IMU data [seq_len, 6]
+        
+    Returns:
+        Integrated IMU features [seq_len, 21]
     """
-    # Create figure
-    fig = plt.figure(figsize=(12, 10))
-    ax = fig.add_subplot(111, projection='3d')
+    seq_len = len(raw_imu_data)
+    integrated_features = np.zeros((seq_len, 21))
     
-    # Plot ground truth trajectory
-    ax.plot(gt_positions[:, 0], gt_positions[:, 1], gt_positions[:, 2], 
-            'g-', linewidth=2, label='Ground Truth')
-    ax.scatter(gt_positions[0, 0], gt_positions[0, 1], gt_positions[0, 2], 
-               c='b', s=80, marker='o', label='Start')
-    ax.scatter(gt_positions[-1, 0], gt_positions[-1, 1], gt_positions[-1, 2], 
-               c='g', s=80, marker='s', label='End (GT)')
+    # Copy raw IMU data to first 6 dimensions
+    integrated_features[:, 0:6] = raw_imu_data
     
-    # Plot predicted trajectory
-    ax.plot(pred_positions[:, 0], pred_positions[:, 1], pred_positions[:, 2], 
-            'r--', linewidth=2, label='Predicted')
-    ax.scatter(pred_positions[-1, 0], pred_positions[-1, 1], pred_positions[-1, 2], 
-               c='r', s=80, marker='x', label='End (Pred)')
+    # The remaining 15 features would normally contain:
+    # - orientation_change (9D)
+    # - velocity (3D)
+    # - displacement (3D)
+    # We're leaving them as zeros
     
-    # Set labels and title
-    ax.set_xlabel('X (m)')
-    ax.set_ylabel('Y (m)')
-    ax.set_zlabel('Z (m)')
-    ax.set_title(title)
-    ax.legend()
-    
-    # Equal aspect ratio
-    all_x = np.concatenate((gt_positions[:, 0], pred_positions[:, 0]))
-    all_y = np.concatenate((gt_positions[:, 1], pred_positions[:, 1]))
-    all_z = np.concatenate((gt_positions[:, 2], pred_positions[:, 2]))
-    
-    max_range = np.max([
-        all_x.max() - all_x.min(),
-        all_y.max() - all_y.min(),
-        all_z.max() - all_z.min()
-    ])
-    
-    mid_x = (all_x.max() + all_x.min()) / 2
-    mid_y = (all_y.max() + all_y.min()) / 2
-    mid_z = (all_z.max() + all_z.min()) / 2
-    
-    ax.set_xlim(mid_x - max_range/2, mid_x + max_range/2)
-    ax.set_ylim(mid_y - max_range/2, mid_y + max_range/2)
-    ax.set_zlim(mid_z - max_range/2, mid_z + max_range/2)
-    
-    # Save if path is provided
-    if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    
-    plt.close(fig)
-    return fig, ax
+    return integrated_features
 
-def plot_position_trajectory_2d(gt_positions, pred_positions, title="Trajectory", save_path=None):
+def integrate_trajectory(rel_poses, scale_factor=0.1, apply_rotation=True, is_camera_frame=True):
     """
-    Plot 2D projections of the trajectory (top-down, side, and front views).
+    Flexible trajectory integration with configurable parameters.
     
     Args:
-        gt_positions: Ground truth positions [N, 3] (tx, ty, tz)
-        pred_positions: Predicted positions [N, 3] (tx, ty, tz)
-        title: Plot title
-        save_path: Path to save the figure
+        rel_poses: Array of relative poses [N, 6] with [roll, pitch, yaw, x, y, z]
+        scale_factor: Scaling factor for translations
+        apply_rotation: Whether to apply rotation to translations
+        is_camera_frame: Whether poses are in camera frame
+        
+    Returns:
+        abs_poses: Array of absolute poses [N+1, 7] with [x, y, z, qx, qy, qz, qw]
     """
+    # Create absolute poses array (first pose is identity)
+    abs_poses = np.zeros((len(rel_poses) + 1, 7))
+    abs_poses[0, 6] = 1.0  # Identity quaternion [0, 0, 0, 1]
+    
+    # Current state
+    curr_pos = np.zeros(3)
+    curr_rot = Rotation.identity()
+    
+    # Body-to-camera transformation if needed
+    if not is_camera_frame and hasattr(par, 'body_to_camera'):
+        body_to_camera = par.body_to_camera.cpu().numpy()
+        camera_to_body = np.linalg.inv(body_to_camera)
+    
+    for i in range(len(rel_poses)):
+        # Get relative pose
+        rel_euler = rel_poses[i, :3]  # roll, pitch, yaw
+        rel_trans = rel_poses[i, 3:6]  # x, y, z
+        
+        # Scale translations
+        rel_trans = rel_trans * scale_factor
+        
+        # Apply coordinate transformation if not in camera frame
+        if not is_camera_frame and hasattr(par, 'body_to_camera'):
+            # Transform from body to camera frame
+            rel_rot_mat = Rotation.from_euler('xyz', rel_euler).as_matrix()
+            rel_rot_mat = camera_to_body @ rel_rot_mat @ body_to_camera
+            rel_rot = Rotation.from_matrix(rel_rot_mat)
+            rel_trans = camera_to_body @ rel_trans
+        else:
+            # Use as is
+            rel_rot = Rotation.from_euler('xyz', rel_euler)
+        
+        # Update rotation
+        curr_rot = curr_rot * rel_rot
+        
+        # Update position - either with or without rotation
+        if apply_rotation:
+            # With rotation (standard approach)
+            curr_pos = curr_pos + curr_rot.apply(rel_trans)
+        else:
+            # Without rotation (simple sum)
+            curr_pos = curr_pos + rel_trans
+        
+        # Store results
+        abs_poses[i+1, :3] = curr_pos
+        abs_poses[i+1, 3:7] = curr_rot.as_quat()
+    
+    return abs_poses
+
+def prepare_ground_truth(gt_poses):
+    """
+    Convert ground truth poses to standard format.
+    
+    Args:
+        gt_poses: Ground truth poses [N, 6] with [roll, pitch, yaw, x, y, z]
+        
+    Returns:
+        Ground truth trajectory [N, 7] with [x, y, z, qx, qy, qz, qw]
+    """
+    gt_traj = np.zeros((len(gt_poses), 7))
+    
+    for i in range(len(gt_poses)):
+        # Position is the last 3 elements
+        gt_traj[i, 0:3] = gt_poses[i, 3:6]
+        
+        # Convert Euler to quaternion for orientation
+        euler = gt_poses[i, 0:3]  # roll, pitch, yaw
+        rot = Rotation.from_euler('xyz', euler)
+        quat = rot.as_quat()  # [qx, qy, qz, qw]
+        gt_traj[i, 3:7] = quat
+    
+    return gt_traj
+
+def compute_ate(pred_traj, gt_traj):
+    """
+    Compute Absolute Trajectory Error.
+    
+    Args:
+        pred_traj: Predicted trajectory [N, 7] with [x, y, z, qx, qy, qz, qw]
+        gt_traj: Ground truth trajectory [N, 7] with [x, y, z, qx, qy, qz, qw]
+        
+    Returns:
+        mean_error: Mean position error
+        std_error: Standard deviation of position error
+        max_error: Maximum position error
+    """
+    # Ensure same length
+    min_len = min(len(pred_traj), len(gt_traj))
+    pred_pos = pred_traj[:min_len, :3]
+    gt_pos = gt_traj[:min_len, :3]
+    
+    # Compute position errors
+    pos_errors = np.linalg.norm(pred_pos - gt_pos, axis=1)
+    
+    return np.mean(pos_errors), np.std(pos_errors), np.max(pos_errors)
+
+def compute_rpe(pred_traj, gt_traj, delta=1):
+    """
+    Compute Relative Pose Error.
+    
+    Args:
+        pred_traj: Predicted trajectory [N, 7] with [x, y, z, qx, qy, qz, qw]
+        gt_traj: Ground truth trajectory [N, 7] with [x, y, z, qx, qy, qz, qw]
+        delta: Frame delta for computing relative pose
+        
+    Returns:
+        trans_error: Mean translation error
+        rot_error: Mean rotation error in radians
+    """
+    # Ensure same length
+    min_len = min(len(pred_traj), len(gt_traj))
+    if min_len <= delta:
+        return 0, 0
+    
+    # Compute relative poses
+    trans_errors = []
+    rot_errors = []
+    
+    for i in range(0, min_len - delta):
+        # Extract poses
+        p1 = pred_traj[i]
+        p2 = pred_traj[i + delta]
+        g1 = gt_traj[i]
+        g2 = gt_traj[i + delta]
+        
+        # Extract positions
+        p1_pos, p2_pos = p1[:3], p2[:3]
+        g1_pos, g2_pos = g1[:3], g2[:3]
+        
+        # Extract rotations
+        p1_rot = Rotation.from_quat(p1[3:7])
+        p2_rot = Rotation.from_quat(p2[3:7])
+        g1_rot = Rotation.from_quat(g1[3:7])
+        g2_rot = Rotation.from_quat(g2[3:7])
+        
+        # Compute relative transforms
+        p_rel_trans = p2_pos - p1_pos
+        g_rel_trans = g2_pos - g1_pos
+        
+        # Compute relative rotations
+        p_rel_rot = p1_rot.inv() * p2_rot
+        g_rel_rot = g1_rot.inv() * g2_rot
+        
+        # Compute errors
+        trans_error = np.linalg.norm(p_rel_trans - g_rel_trans)
+        rot_error = (p_rel_rot.inv() * g_rel_rot).magnitude()
+        
+        trans_errors.append(trans_error)
+        rot_errors.append(rot_error)
+    
+    return np.mean(trans_errors), np.mean(rot_errors)
+
+def plot_trajectory(pred_traj, gt_traj, title="Trajectory Comparison", save_path=None):
+    """Plot trajectory comparison."""
     fig, axs = plt.subplots(1, 3, figsize=(18, 6))
     
-    # XY plot (top-down view)
-    axs[0].plot(gt_positions[:, 0], gt_positions[:, 1], 'g-', linewidth=2, label='Ground Truth')
-    axs[0].plot(pred_positions[:, 0], pred_positions[:, 1], 'r--', linewidth=2, label='Predicted')
-    axs[0].scatter(gt_positions[0, 0], gt_positions[0, 1], c='b', s=80, marker='o', label='Start')
-    axs[0].scatter(gt_positions[-1, 0], gt_positions[-1, 1], c='g', s=80, marker='s', label='End (GT)')
-    axs[0].scatter(pred_positions[-1, 0], pred_positions[-1, 1], c='r', s=80, marker='x', label='End (Pred)')
+    # Extract positions
+    pred_pos = pred_traj[:, :3]
+    gt_pos = gt_traj[:, :3]
+    
+    # XY plane (top view)
+    axs[0].plot(pred_pos[:, 0], pred_pos[:, 1], 'r-', linewidth=2, label='Predicted')
+    axs[0].plot(gt_pos[:, 0], gt_pos[:, 1], 'b-', linewidth=2, label='Ground Truth')
+    axs[0].scatter(pred_pos[0, 0], pred_pos[0, 1], c='g', marker='o', s=100, label='Start')
+    axs[0].scatter(pred_pos[-1, 0], pred_pos[-1, 1], c='r', marker='o', s=100, label='End (Pred)')
+    axs[0].scatter(gt_pos[-1, 0], gt_pos[-1, 1], c='b', marker='o', s=100, label='End (GT)')
     axs[0].set_xlabel('X (m)')
     axs[0].set_ylabel('Y (m)')
-    axs[0].set_title('XY Plane (Top-Down View)')
+    axs[0].set_title('XY Plane (Top View)')
     axs[0].grid(True)
-    axs[0].axis('equal')
     axs[0].legend()
     
-    # XZ plot (side view)
-    axs[1].plot(gt_positions[:, 0], gt_positions[:, 2], 'g-', linewidth=2, label='Ground Truth')
-    axs[1].plot(pred_positions[:, 0], pred_positions[:, 2], 'r--', linewidth=2, label='Predicted')
-    axs[1].scatter(gt_positions[0, 0], gt_positions[0, 2], c='b', s=80, marker='o', label='Start')
-    axs[1].scatter(gt_positions[-1, 0], gt_positions[-1, 2], c='g', s=80, marker='s', label='End (GT)')
-    axs[1].scatter(pred_positions[-1, 0], pred_positions[-1, 2], c='r', s=80, marker='x', label='End (Pred)')
+    # XZ plane (side view)
+    axs[1].plot(pred_pos[:, 0], pred_pos[:, 2], 'r-', linewidth=2, label='Predicted')
+    axs[1].plot(gt_pos[:, 0], gt_pos[:, 2], 'b-', linewidth=2, label='Ground Truth')
+    axs[1].scatter(pred_pos[0, 0], pred_pos[0, 2], c='g', marker='o', s=100, label='Start')
+    axs[1].scatter(pred_pos[-1, 0], pred_pos[-1, 2], c='r', marker='o', s=100, label='End (Pred)')
+    axs[1].scatter(gt_pos[-1, 0], gt_pos[-1, 2], c='b', marker='o', s=100, label='End (GT)')
     axs[1].set_xlabel('X (m)')
     axs[1].set_ylabel('Z (m)')
     axs[1].set_title('XZ Plane (Side View)')
     axs[1].grid(True)
-    axs[1].axis('equal')
     axs[1].legend()
     
-    # YZ plot (front view)
-    axs[2].plot(gt_positions[:, 1], gt_positions[:, 2], 'g-', linewidth=2, label='Ground Truth')
-    axs[2].plot(pred_positions[:, 1], pred_positions[:, 2], 'r--', linewidth=2, label='Predicted')
-    axs[2].scatter(gt_positions[0, 1], gt_positions[0, 2], c='b', s=80, marker='o', label='Start')
-    axs[2].scatter(gt_positions[-1, 1], gt_positions[-1, 2], c='g', s=80, marker='s', label='End (GT)')
-    axs[2].scatter(pred_positions[-1, 1], pred_positions[-1, 2], c='r', s=80, marker='x', label='End (Pred)')
+    # YZ plane (front view)
+    axs[2].plot(pred_pos[:, 1], pred_pos[:, 2], 'r-', linewidth=2, label='Predicted')
+    axs[2].plot(gt_pos[:, 1], gt_pos[:, 2], 'b-', linewidth=2, label='Ground Truth')
+    axs[2].scatter(pred_pos[0, 1], pred_pos[0, 2], c='g', marker='o', s=100, label='Start')
+    axs[2].scatter(pred_pos[-1, 1], pred_pos[-1, 2], c='r', marker='o', s=100, label='End (Pred)')
+    axs[2].scatter(gt_pos[-1, 1], gt_pos[-1, 2], c='b', marker='o', s=100, label='End (GT)')
     axs[2].set_xlabel('Y (m)')
     axs[2].set_ylabel('Z (m)')
     axs[2].set_title('YZ Plane (Front View)')
     axs[2].grid(True)
-    axs[2].axis('equal')
     axs[2].legend()
     
-    plt.suptitle(title)
+    fig.suptitle(title, fontsize=16)
     plt.tight_layout()
     
-    # Save if path is provided
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.savefig(save_path, dpi=300)
     
-    plt.close(fig)
-    return fig, axs
+    return fig
 
-def test_inference_on_sequence(model, image_dir, device, output_dir):
+def find_optimal_params(pred_rel_poses, gt_traj, is_camera_frame=True):
     """
-    Run inference on a single image sequence without ground truth.
+    Find optimal trajectory integration parameters.
     
     Args:
-        model: Trained RGBVO model
-        image_dir: Directory containing the image sequence
-        device: Device to run inference on
-        output_dir: Directory to save outputs
+        pred_rel_poses: Predicted relative poses [N, 6]
+        gt_traj: Ground truth trajectory [N+1, 7]
+        is_camera_frame: Whether poses are in camera frame
+        
+    Returns:
+        Dictionary with optimal parameters
     """
-    logger.info(f"Running inference on images in {image_dir}")
+    logger.info("Finding optimal integration parameters...")
     
-    # Make sure output directory exists
-    os.makedirs(output_dir, exist_ok=True)
+    best_ate = float('inf')
+    best_params = None
+    results = []
     
-    # Get image files
-    image_files = glob.glob(os.path.join(image_dir, '*.png'))
-    image_files.sort()
+    # Test different scaling factors and integration methods
+    scale_values = [0.20, 0.25, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.9]
+    apply_rot_values = [True, False]
     
-    if len(image_files) < par.seq_len + 1:
-        logger.error(f"Not enough images in {image_dir} (found {len(image_files)}, need at least {par.seq_len + 1})")
-        return
-    
-    # Image transformations - using the same transformation as in training
-    transform_ops = [
-        transforms.Resize((par.img_h, par.img_w)),
-        transforms.ToTensor()
-    ]
-    transformer = transforms.Compose(transform_ops)
-    normalizer = transforms.Normalize(mean=par.img_means_rgb, std=par.img_stds_rgb)
-    
-    # Get transformation parameters
-    body_to_camera_rotation = par.body_to_camera_rotation.to(device)
-    body_to_camera_translation = par.body_to_camera_translation.to(device)
-    
-    # Initialize predictions list
-    all_rel_poses = []
-    
-    # Process images in sequence
-    model.eval()
-    with torch.no_grad():
-        # Process all windows of size seq_len+1
-        for i in range(0, len(image_files) - par.seq_len):
-            # Load images for this window
-            image_window = []
-            for j in range(i, i + par.seq_len + 1):
-                try:
-                    img = Image.open(image_files[j])
-                    img_tensor = transformer(img)
-                    
-                    # Apply FlowNet normalization if required
-                    if par.minus_point_5:
-                        img_tensor = img_tensor - 0.5
-                    
-                    # Apply normalization
-                    img_tensor = normalizer(img_tensor)
-                    image_window.append(img_tensor)
-                except Exception as e:
-                    logger.error(f"Error loading image {image_files[j]}: {e}")
-                    return
+    for scale in scale_values:
+        for apply_rot in apply_rot_values:
+            # Integrate trajectory with current parameters
+            pred_traj = integrate_trajectory(
+                pred_rel_poses, 
+                scale_factor=scale, 
+                apply_rotation=apply_rot,
+                is_camera_frame=is_camera_frame
+            )
             
-            # Stack images and add batch dimension
-            image_window = torch.stack(image_window).unsqueeze(0).to(device)
+            # Compute ATE
+            mean_ate, std_ate, max_ate = compute_ate(pred_traj, gt_traj)
             
-            # Forward pass
-            pred_rel_poses = model(image_window)
+            # Store results
+            results.append({
+                'scale': scale,
+                'apply_rotation': apply_rot,
+                'ate_mean': mean_ate,
+                'ate_std': std_ate,
+                'ate_max': max_ate
+            })
             
-            # Store relative poses
-            all_rel_poses.append(pred_rel_poses[0].cpu().numpy())
+            # Check if this is better
+            if mean_ate < best_ate:
+                best_ate = mean_ate
+                best_params = {
+                    'scale': scale, 
+                    'apply_rotation': apply_rot,
+                    'ate_mean': mean_ate,
+                    'ate_std': std_ate
+                }
+                logger.info(f"New best: Scale={scale}, Apply Rotation={apply_rot}, ATE={mean_ate:.4f}±{std_ate:.4f} m")
     
-    # Reconstruct trajectory if we have predictions
-    if all_rel_poses:
-        # Initialize with identity rotation and zero translation
-        pred_traj = []
-        current_position = np.zeros(3)
-        current_rotation = np.eye(3)
-        
-        # Process all predicted relative poses
-        for rel_seq in all_rel_poses:
-            for i in range(len(rel_seq)):
-                # Extract relative pose components
-                rel_roll, rel_pitch, rel_yaw = rel_seq[i, 0:3]
-                rel_x, rel_y, rel_z = rel_seq[i, 3:6]
-                
-                # Create rotation matrix for relative pose
-                rel_rotation = R.from_euler('xyz', [rel_roll, rel_pitch, rel_yaw]).as_matrix()
-                
-                # Update current rotation
-                current_rotation = current_rotation @ rel_rotation
-                
-                # Create translation vector
-                rel_translation = np.array([rel_x, rel_y, rel_z])
-                
-                # Apply to current position (rotate translation to global frame)
-                current_position = current_position + current_rotation @ rel_translation
-                
-                # Convert rotation to quaternion
-                r = R.from_matrix(current_rotation)
-                quat = r.as_quat()  # [x, y, z, w]
-                quat = normalize_quaternion(quat)
-                
-                # Store in TartanAir format: tx ty tz qx qy qz qw
-                pred_traj.append(np.concatenate([current_position, quat]))
-        
-        # Convert to numpy array
-        pred_traj = np.array(pred_traj)
-        
-        # Verify shape - should be [N, 7]
-        if pred_traj.shape[1] != 7:
-            logger.error(f"ERROR: Predicted trajectory has {pred_traj.shape[1]} columns instead of 7!")
-            # Fix if possible
-            if pred_traj.shape[1] < 7:
-                logger.warning("Padding trajectory to 7 columns")
-                padded = np.zeros((pred_traj.shape[0], 7))
-                padded[:, :pred_traj.shape[1]] = pred_traj
-                pred_traj = padded
-            else:
-                logger.warning("Truncating trajectory to 7 columns")
-                pred_traj = pred_traj[:, :7]
-        
-        # Extract positions for plotting
-        pred_positions = pred_traj[:, 0:3]
-        
-        # Save trajectory in TartanAir format (use space delimiter)
-        pose_est_path = os.path.join(output_dir, "pose_est.txt")
-        np.savetxt(pose_est_path, pred_traj, delimiter=' ', fmt='%.18e')
-        
-        # Plot 3D trajectory
-        fig = plt.figure(figsize=(12, 10))
-        ax = fig.add_subplot(111, projection='3d')
-        
-        ax.plot(pred_positions[:, 0], pred_positions[:, 1], pred_positions[:, 2], 'r-', linewidth=2)
-        ax.scatter(pred_positions[0, 0], pred_positions[0, 1], pred_positions[0, 2], c='b', s=80, marker='o', label='Start')
-        ax.scatter(pred_positions[-1, 0], pred_positions[-1, 1], pred_positions[-1, 2], c='r', s=80, marker='x', label='End')
-        
-        ax.set_xlabel('X (m)')
-        ax.set_ylabel('Y (m)')
-        ax.set_zlabel('Z (m)')
-        ax.set_title('Predicted Trajectory')
-        ax.legend()
-        
-        # Equal aspect ratio
-        max_range = np.max([
-            pred_positions[:, 0].max() - pred_positions[:, 0].min(),
-            pred_positions[:, 1].max() - pred_positions[:, 1].min(),
-            pred_positions[:, 2].max() - pred_positions[:, 2].min()
-        ])
-        
-        mid_x = (pred_positions[:, 0].max() + pred_positions[:, 0].min()) / 2
-        mid_y = (pred_positions[:, 1].max() + pred_positions[:, 1].min()) / 2
-        mid_z = (pred_positions[:, 2].max() + pred_positions[:, 2].min()) / 2
-        
-        ax.set_xlim(mid_x - max_range/2, mid_x + max_range/2)
-        ax.set_ylim(mid_y - max_range/2, mid_y + max_range/2)
-        ax.set_zlim(mid_z - max_range/2, mid_z + max_range/2)
-        
-        plot_path = os.path.join(output_dir, "trajectory_3d.png")
-        plt.savefig(plot_path, dpi=300, bbox_inches='tight')
-        plt.close()
-        
-        # Plot 2D views
-        fig, axs = plt.subplots(1, 3, figsize=(18, 6))
-        
-        # XY plot (top-down view)
-        axs[0].plot(pred_positions[:, 0], pred_positions[:, 1], 'r-', linewidth=2)
-        axs[0].scatter(pred_positions[0, 0], pred_positions[0, 1], c='b', s=80, marker='o', label='Start')
-        axs[0].scatter(pred_positions[-1, 0], pred_positions[-1, 1], c='r', s=80, marker='x', label='End')
-        axs[0].set_xlabel('X (m)')
-        axs[0].set_ylabel('Y (m)')
-        axs[0].set_title('XY Plane (Top-Down View)')
-        axs[0].grid(True)
-        axs[0].axis('equal')
-        axs[0].legend()
-        
-        # XZ plot (side view)
-        axs[1].plot(pred_positions[:, 0], pred_positions[:, 2], 'r-', linewidth=2)
-        axs[1].scatter(pred_positions[0, 0], pred_positions[0, 2], c='b', s=80, marker='o', label='Start')
-        axs[1].scatter(pred_positions[-1, 0], pred_positions[-1, 2], c='r', s=80, marker='x', label='End')
-        axs[1].set_xlabel('X (m)')
-        axs[1].set_ylabel('Z (m)')
-        axs[1].set_title('XZ Plane (Side View)')
-        axs[1].grid(True)
-        axs[1].axis('equal')
-        axs[1].legend()
-        
-        # YZ plot (front view)
-        axs[2].plot(pred_positions[:, 1], pred_positions[:, 2], 'r-', linewidth=2)
-        axs[2].scatter(pred_positions[0, 1], pred_positions[0, 2], c='b', s=80, marker='o', label='Start')
-        axs[2].scatter(pred_positions[-1, 1], pred_positions[-1, 2], c='r', s=80, marker='x', label='End')
-        axs[2].set_xlabel('Y (m)')
-        axs[2].set_ylabel('Z (m)')
-        axs[2].set_title('YZ Plane (Front View)')
-        axs[2].grid(True)
-        axs[2].axis('equal')
-        axs[2].legend()
-        
-        plt.suptitle('Predicted Trajectory Projections')
-        plt.tight_layout()
-        
-        plot_path_2d = os.path.join(output_dir, "trajectory_2d.png")
-        plt.savefig(plot_path_2d, dpi=300, bbox_inches='tight')
-        plt.close()
-        
-        # Test load the saved pose file to verify it's correctly formatted
-        try:
-            test_est = np.loadtxt(pose_est_path)
-            logger.info(f"Verified pose file: {test_est.shape}")
-        except Exception as e:
-            logger.error(f"Error verifying pose file: {e}")
-        
-        logger.info(f"Inference completed. Results saved to {output_dir}")
-    else:
-        logger.error("No predictions were made.")
+    # Sort results by ATE
+    results.sort(key=lambda x: x['ate_mean'])
+    
+    # Log top 5 results
+    logger.info("Top 5 parameter sets:")
+    for i in range(min(5, len(results))):
+        r = results[i]
+        logger.info(f"  {i+1}. Scale={r['scale']}, Apply Rotation={r['apply_rotation']}, ATE={r['ate_mean']:.4f}±{r['ate_std']:.4f} m")
+    
+    return best_params
 
-def main(args):
+def test_model(args):
+    """Run model testing on a trajectory."""
     # Set device
-    device = torch.device('cuda' if torch.cuda.is_available() and not args.cpu else 'cpu')
+    device = torch.device("cpu") if args.cpu else torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
     
-    # Create model
-    model = RGBVO(imsize1=par.img_h, imsize2=par.img_w, batchNorm=par.batch_norm)
-    model = model.to(device)
-    
-    # Load model weights
-    model_path = args.model if args.model else par.model_path
-    if not os.path.exists(model_path):
-        logger.error(f"Model file not found: {model_path}")
-        return
-    
-    checkpoint = torch.load(model_path, map_location=device, weights_only=False)
-    if "model_state_dict" in checkpoint:
-        # This is a full checkpoint (contains optimizer state, etc.)
-        model.load_state_dict(checkpoint["model_state_dict"])
-        logger.info(f"Loaded model weights from checkpoint at epoch {checkpoint.get('epoch', 'unknown')}")
-    else:
-        # This is just the model weights
-        model.load_state_dict(checkpoint)
-        logger.info(f"Loaded model weights directly")
-    logger.info(f"Loaded model from: {model_path}")
-    
     # Create output directory
-    output_dir = args.output if args.output else 'results'
+    output_dir = args.output
     os.makedirs(output_dir, exist_ok=True)
     
-    # Run inference on a single sequence if specified
-    if args.inference_dir:
-        test_inference_on_sequence(model, args.inference_dir, device, output_dir)
-        return
+    # Create trajectory-specific output directory
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    traj_output_dir = os.path.join(output_dir, f"{args.climate.replace('/', '_')}_{args.traj_id}_{timestamp}")
+    os.makedirs(traj_output_dir, exist_ok=True)
     
-    # Define test trajectories
-    if args.trajectories:
-        # Parse trajectory string: env/difficulty/trajectory_id,env/difficulty/trajectory_id,...
-        test_trajectories = []
-        for traj_str in args.trajectories.split(','):
-            parts = traj_str.split('/')
-            if len(parts) >= 3:
-                env = parts[0]
-                difficulty = parts[1]
-                trajectory_id = parts[2]
-                test_trajectories.append((env, difficulty, trajectory_id))
-    else:
-        # Use validation trajectories by default
-        test_trajectories = par.valid_trajectories
+    # Load model
+    model_path = args.model if args.model else par.model_path
+    logger.info(f"Loading model from {model_path}")
     
-    logger.info(f"Testing on {len(test_trajectories)} trajectories")
+    # Create model
+    logger.info("Creating model...")
+    try:
+        model = VisualInertialOdometryModel(
+            imsize1=par.img_h,
+            imsize2=par.img_w,
+            batchNorm=par.batch_norm,
+            use_imu=True,
+            imu_feature_size=512,
+            imu_input_size=21,  # For integrated IMU
+            use_gps=True,
+            gps_feature_size=512,
+            gps_input_size=9,
+            use_adaptive_weighting=True,
+            use_depth=True,
+            use_depth_temporal=True,
+            use_depth_translation=True,
+            use_gps_temporal=True,
+            pretrained_depth_path=par.pretrained_depth
+        )
+    except Exception as e:
+        logger.warning(f"Error creating model with all parameters: {e}")
+        logger.info("Trying simplified model creation...")
+        model = VisualInertialOdometryModel(
+            imsize1=par.img_h,
+            imsize2=par.img_w,
+            batchNorm=par.batch_norm,
+            use_imu=True,
+            use_gps=True,
+            use_depth=True,
+            use_depth_temporal=True,
+            use_depth_translation=True,
+            pretrained_depth_path=par.pretrained_depth
+        )
     
-    # Test on each trajectory
-    all_metrics = {}
-    for trajectory in test_trajectories:
-        metrics = test_trajectory(model, trajectory, device, output_dir)
-        if metrics:
-            traj_key = f"{trajectory[0]}/{trajectory[1]}/{trajectory[2]}"
-            all_metrics[traj_key] = metrics
-    
-    # Save overall metrics
-    overall_path = os.path.join(output_dir, "overall_metrics.txt")
-    with open(overall_path, 'w') as f:
-        f.write(f"Test results for {len(all_metrics)} trajectories\n")
-        f.write("=" * 50 + "\n\n")
-        
-        # Calculate average metrics across all trajectories
-        if all_metrics:
-            avg_ate_mean = np.mean([m['ate_mean'] for m in all_metrics.values()])
-            avg_rpe_trans_mean = np.mean([m['rpe_trans_mean'] for m in all_metrics.values()])
-            avg_rpe_rot_mean = np.mean([m['rpe_rot_mean'] for m in all_metrics.values()])
-            
-            f.write(f"Overall average ATE: {avg_ate_mean:.4f} m\n")
-            f.write(f"Overall average RPE Translation: {avg_rpe_trans_mean:.4f} m\n")
-            f.write(f"Overall average RPE Rotation: {avg_rpe_rot_mean:.4f} rad\n\n")
-            
-            f.write("Per-trajectory metrics:\n")
-            f.write("-" * 50 + "\n")
-            for traj, metrics in all_metrics.items():
-                f.write(f"Trajectory: {traj}\n")
-                f.write(f"  ATE: {metrics['ate_mean']:.4f} ± {metrics['ate_std']:.4f} m\n")
-                f.write(f"  RPE Translation: {metrics['rpe_trans_mean']:.4f} ± {metrics['rpe_trans_std']:.4f} m\n")
-                f.write(f"  RPE Rotation: {metrics['rpe_rot_mean']:.4f} ± {metrics['rpe_rot_std']:.4f} rad\n\n")
+    # Load weights
+    try:
+        checkpoint = torch.load(model_path, map_location=device)
+        if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+            model.load_state_dict(checkpoint['model_state_dict'], strict=False)
         else:
-            f.write("No valid results to report.\n")
+            model.load_state_dict(checkpoint, strict=False)
+        logger.info("Model weights loaded successfully")
+    except Exception as e:
+        logger.error(f"Error loading model weights: {e}")
+        return None
     
-    # Print summary
-    logger.info("\n" + "=" * 50)
-    logger.info("Testing completed!")
-    if all_metrics:
-        avg_ate_mean = np.mean([m['ate_mean'] for m in all_metrics.values()])
-        avg_rpe_trans_mean = np.mean([m['rpe_trans_mean'] for m in all_metrics.values()])
-        avg_rpe_rot_mean = np.mean([m['rpe_rot_mean'] for m in all_metrics.values()])
+    # Move model to device
+    model = model.to(device)
+    model.eval()
+    
+    # Get trajectory paths
+    traj_dir = os.path.join(par.data_dir, args.climate, args.traj_id)
+    rgb_dir = os.path.join(traj_dir, "image_rgb")
+    depth_dir = os.path.join(traj_dir, "depth")
+    
+    # Check for camera frame or body frame
+    pose_file = os.path.join(par.pose_dir, args.climate, "poses", f"camera_poses_{args.traj_id.split('_')[1]}.npy")
+    is_camera_frame = True
+    
+    if not os.path.exists(pose_file):
+        logger.warning("Camera frame poses not found, trying body frame...")
+        pose_file = os.path.join(par.pose_dir, args.climate, "poses", f"poses_{args.traj_id.split('_')[1]}.npy")
+        is_camera_frame = False
         
-        logger.info(f"Overall average ATE: {avg_ate_mean:.4f} m")
-        logger.info(f"Overall average RPE Translation: {avg_rpe_trans_mean:.4f} m")
-        logger.info(f"Overall average RPE Rotation: {avg_rpe_rot_mean:.4f} rad")
-    logger.info("=" * 50)
+        if not os.path.exists(pose_file):
+            logger.error(f"No pose file found for trajectory {args.traj_id}")
+            return None
+    
+    # Load ground truth poses
+    gt_poses = np.load(pose_file)
+    logger.info(f"Loaded ground truth poses: {gt_poses.shape}")
+    logger.info(f"Using {'camera' if is_camera_frame else 'body'} frame")
+    
+    # Get IMU data
+    imu_data = None
+    imu_file = os.path.join(traj_dir, "imu", "camera_imu.npy" if is_camera_frame else "imu.npy")
+    if os.path.exists(imu_file):
+        imu_data = np.load(imu_file)
+        logger.info(f"Loaded IMU data: {imu_data.shape}")
+    else:
+        logger.warning(f"IMU data not found at {imu_file}")
+    
+    # Get GPS data
+    gps_data = None
+    gps_file = os.path.join(traj_dir, "gps", "camera_gps.npy" if is_camera_frame else "gps.npy")
+    if os.path.exists(gps_file):
+        gps_data = np.load(gps_file)
+        logger.info(f"Loaded GPS data: {gps_data.shape}")
+    else:
+        logger.warning(f"GPS data not found at {gps_file}")
+    
+    # Get RGB files
+    rgb_files = sorted([os.path.join(rgb_dir, f) for f in os.listdir(rgb_dir) 
+                       if f.lower().endswith(('.jpg', '.jpeg'))])
+    
+    # Get depth files if available
+    depth_files = []
+    if os.path.exists(depth_dir):
+        depth_files = sorted([os.path.join(depth_dir, f) for f in os.listdir(depth_dir)
+                             if f.lower().endswith('.png')])
+    
+    # Check if we have enough frames
+    if len(rgb_files) < par.seq_len + 1:
+        logger.error(f"Not enough RGB frames: {len(rgb_files)}, need at least {par.seq_len + 1}")
+        return None
+    
+    # Run model inference
+    all_pred_rel_poses = []
+    stride = args.stride
+    
+    with torch.no_grad():
+        for i in tqdm(range(0, len(rgb_files) - par.seq_len, stride), desc=f"Processing {args.traj_id}"):
+            # Load RGB sequence
+            rgb_seq = []
+            for j in range(i, i + par.seq_len + 1):
+                if j >= len(rgb_files):
+                    break
+                img_tensor = load_image(rgb_files[j])
+                if img_tensor is None:
+                    break
+                rgb_seq.append(img_tensor)
+            
+            if len(rgb_seq) < par.seq_len + 1:
+                logger.warning(f"Skipping sequence at {i} - not enough valid RGB frames")
+                continue
+            
+            # Stack RGB frames
+            rgb_tensor = torch.stack(rgb_seq).unsqueeze(0).to(device)
+            
+            # Load depth sequence if available
+            depth_tensor = None
+            if depth_files and model.use_depth:
+                depth_seq = []
+                for j in range(i, i + par.seq_len + 1):
+                    if j >= len(depth_files):
+                        break
+                    depth_img_tensor = load_depth(depth_files[j])
+                    if depth_img_tensor is None:
+                        break
+                    depth_seq.append(depth_img_tensor)
+                
+                if len(depth_seq) == par.seq_len + 1:
+                    depth_tensor = torch.stack(depth_seq).unsqueeze(0).to(device)
+            
+            # Prepare IMU data
+            imu_tensor = None
+            if imu_data is not None and model.use_imu and i + par.seq_len <= len(imu_data):
+                # Get IMU data for this sequence
+                imu_seq = imu_data[i:i+par.seq_len]
+                
+                # Convert to integrated format
+                integrated_imu = create_integrated_imu_features(imu_seq)
+                imu_tensor = torch.FloatTensor(integrated_imu).unsqueeze(0).to(device)
+                
+                # Log shape for first sequence
+                if i == 0:
+                    logger.info(f"IMU tensor shape: {imu_tensor.shape}")
+            
+            # Prepare GPS data
+            gps_tensor = None
+            if gps_data is not None and model.use_gps and i + par.seq_len <= len(gps_data):
+                gps_seq = gps_data[i:i+par.seq_len]
+                gps_tensor = torch.FloatTensor(gps_seq).unsqueeze(0).to(device)
+                
+                # Log shape for first sequence
+                if i == 0:
+                    logger.info(f"GPS tensor shape: {gps_tensor.shape}")
+            
+            # Forward pass
+            try:
+                pred_rel_poses = model(rgb_tensor, depth=depth_tensor, imu_data=imu_tensor, gps_data=gps_tensor)
+                all_pred_rel_poses.append(pred_rel_poses[0].cpu().numpy())
+                
+                # Print first prediction for debugging
+                if i == 0:
+                    logger.info(f"First relative pose prediction: {pred_rel_poses[0][0].cpu().numpy()}")
+            except Exception as e:
+                logger.error(f"Error during forward pass: {e}")
+                import traceback
+                traceback.print_exc()
+                continue
+    
+    # Check if we got any predictions
+    if not all_pred_rel_poses:
+        logger.error("No valid predictions generated")
+        return None
+    
+    # Combine all predictions
+    pred_rel_poses = np.concatenate(all_pred_rel_poses, axis=0)
+    logger.info(f"Generated {len(pred_rel_poses)} relative pose predictions")
+    
+    # Save raw relative poses
+    np.savetxt(os.path.join(traj_output_dir, "pred_rel_poses.txt"), pred_rel_poses, fmt="%.8f")
+    
+    # Convert ground truth poses to standard format
+    gt_traj = prepare_ground_truth(gt_poses)
+    
+    # Find optimal integration parameters if not specified
+    if args.scale is None or not args.scale_only:
+        optimal_params = find_optimal_params(pred_rel_poses, gt_traj, is_camera_frame)
+        scale_factor = optimal_params['scale']
+        apply_rotation = optimal_params['apply_rotation']
+        logger.info(f"Using optimal parameters: Scale={scale_factor}, Apply Rotation={apply_rotation}")
+    else:
+        scale_factor = args.scale
+        apply_rotation = not args.no_rotation
+        logger.info(f"Using specified parameters: Scale={scale_factor}, Apply Rotation={apply_rotation}")
+    
+    # Integrate trajectory with optimal parameters
+    pred_abs_traj = integrate_trajectory(
+        pred_rel_poses, 
+        scale_factor=scale_factor, 
+        apply_rotation=apply_rotation,
+        is_camera_frame=is_camera_frame
+    )
+    logger.info(f"Integrated trajectory shape: {pred_abs_traj.shape}")
+    
+    # Trim to matching length
+    min_len = min(len(pred_abs_traj), len(gt_traj))
+    pred_abs_traj = pred_abs_traj[:min_len]
+    gt_traj = gt_traj[:min_len]
+    
+    # Compute errors
+    ate_mean, ate_std, ate_max = compute_ate(pred_abs_traj, gt_traj)
+    rpe_trans, rpe_rot = compute_rpe(pred_abs_traj, gt_traj)
+    
+    # Log metrics
+    logger.info(f"ATE: {ate_mean:.4f} ± {ate_std:.4f} m (max: {ate_max:.4f} m)")
+    logger.info(f"RPE Trans: {rpe_trans:.4f} m")
+    logger.info(f"RPE Rot: {rpe_rot:.4f} rad ({rpe_rot * 180 / np.pi:.4f} degrees)")
+    
+    # Plot trajectory
+    title = f"Trajectory: {args.climate}/{args.traj_id}\nATE: {ate_mean:.4f} ± {ate_std:.4f} m"
+    fig = plot_trajectory(pred_abs_traj, gt_traj, title=title, save_path=os.path.join(traj_output_dir, "trajectory.png"))
+    plt.close(fig)
+    
+    # Save trajectories
+    np.savetxt(os.path.join(traj_output_dir, "pred_abs_traj.txt"), pred_abs_traj, fmt="%.8f")
+    np.savetxt(os.path.join(traj_output_dir, "gt_traj.txt"), gt_traj, fmt="%.8f")
+    
+    # Save metrics
+    metrics = {
+        "trajectory": f"{args.climate}/{args.traj_id}",
+        "integration_params": {
+            "scale_factor": float(scale_factor),
+            "apply_rotation": apply_rotation
+        },
+        "ate": {
+            "mean": float(ate_mean),
+            "std": float(ate_std),
+            "max": float(ate_max)
+        },
+        "rpe": {
+            "translation": float(rpe_trans),
+            "rotation_rad": float(rpe_rot),
+            "rotation_deg": float(rpe_rot * 180 / np.pi)
+        },
+        "modalities": {
+            "rgb": True,
+            "depth": model.use_depth and len(depth_files) > 0,
+            "imu": model.use_imu and imu_data is not None,
+            "gps": model.use_gps and gps_data is not None
+        }
+    }
+    
+    with open(os.path.join(traj_output_dir, "metrics.json"), "w") as f:
+        json.dump(metrics, f, indent=4)
+    
+    logger.info(f"Results saved to {traj_output_dir}")
+    
+    return metrics
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Test RGBVO model on TartanAir')
-    parser.add_argument('--model', type=str, help='Path to model file')
-    parser.add_argument('--output', type=str, help='Output directory')
-    parser.add_argument('--trajectories', type=str, help='Comma-separated list of trajectories (env/difficulty/trajectory_id)')
-    parser.add_argument('--inference_dir', type=str, help='Directory with image sequence for inference only')
-    parser.add_argument('--cpu', action='store_true', help='Force using CPU')
+def main():
+    """Main entry point."""
+    parser = argparse.ArgumentParser(description="Optimized Visual Odometry Testing")
+    parser.add_argument("--model", type=str, default=None, help="Path to model checkpoint")
+    parser.add_argument("--climate", type=str, default="Kite_training/sunny", help="Climate set")
+    parser.add_argument("--traj_id", type=str, default="trajectory_0001", help="Trajectory ID")
+    parser.add_argument("--output", type=str, default="results", help="Output directory")
+    parser.add_argument("--cpu", action="store_true", help="Force CPU usage")
+    parser.add_argument("--stride", type=int, default=1, help="Frame processing stride")
+    parser.add_argument("--scale", type=float, default=None, help="Translation scaling factor")
+    parser.add_argument("--no-rotation", action="store_true", help="Disable rotation in integration")
+    parser.add_argument("--scale-only", action="store_true", help="Use specified scale without optimization")
     args = parser.parse_args()
     
-    main(args)
+    # Run test
+    metrics = test_model(args)
+    
+    if metrics:
+        logger.info("Testing completed successfully")
+        return 0
+    else:
+        logger.error("Testing failed")
+        return 1
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,11 @@
+Trajectory: VO_test/sunny/unknown/trajectory_0000
+Number of sequences: 14985
+Sequence-level metrics (averaged):
+  ATE: 0.0710 ± 0.0526 m
+  RPE Translation: 0.0280 ± 0.0011 m
+  RPE Rotation: 0.0054 ± 0.0000 rad
+  GPS Translation Loss: 0.000309
+
+Full trajectory metrics:
+  Full ATE: 84.3710 ± 33.0664 m
+  Full RPE Translation: 0.4241 ± 0.1741 m
