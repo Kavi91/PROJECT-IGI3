@@ -25,51 +25,56 @@ def train_epoch(model, dataloader, optimizer, device, use_imu=True):
     total_loss = 0.0
     total_rot_loss = 0.0
     total_trans_loss = 0.0
+    total_depth_trans_loss = 0.0
     losses = []
     
-    # Log IMU gradient information periodically
-    log_imu_gradients = use_imu and (par.epochs <= 20 or par.epochs % 10 == 0)
+    # Log gradient information periodically
+    log_gradients = (par.epochs <= 20 or par.epochs % 10 == 0)
     imu_grad_norm = 0
     visual_grad_norm = 0
+    depth_grad_norm = 0
     
     progress_bar = tqdm(dataloader, desc="Training", unit="batch")
     for data in progress_bar:
-        # Unpack data
+        # Unpack data based on enabled modalities
+        idx = 0
+        rgb_seq = data[idx].to(device)
+        idx += 1
+        
+        depth_seq = None
+        if par.use_depth:
+            depth_seq = data[idx].to(device)
+            idx += 1
+        
+        imu_data = None
         if use_imu:
-            rgb_seq, rel_poses, abs_poses, imu_data = data
-            # Move data to device
-            rgb_seq = rgb_seq.to(device)
-            rel_poses = rel_poses.to(device)
-            if imu_data is not None:
-                imu_data = imu_data.to(device)
-            
-            # Forward pass with IMU
-            pred_rel_poses = model(rgb_seq, imu_data)
-        else:
-            rgb_seq, rel_poses, abs_poses, _ = data  # Ignore IMU data
-            # Move data to device
-            rgb_seq = rgb_seq.to(device)
-            rel_poses = rel_poses.to(device)
-            
-            # Forward pass without IMU
-            pred_rel_poses = model(rgb_seq)
+            imu_data = data[idx].to(device)
+            idx += 1
+        
+        rel_poses = data[idx].to(device)
+        abs_poses = data[idx+1].to(device)
+        
+        # Forward pass
+        pred_rel_poses = model(rgb_seq, depth=depth_seq, imu_data=imu_data)
         
         # Compute loss
-        loss, rot_loss, trans_loss = model.get_loss(pred_rel_poses, rel_poses)
+        loss, rot_loss, trans_loss, depth_trans_loss = model.get_loss(pred_rel_poses, rel_poses)
         losses.append(loss.item())
         
         # Backpropagation
         optimizer.zero_grad()
         loss.backward()
         
-        # Log gradient norms for IMU and visual parts
-        if log_imu_gradients:
+        # Log gradient norms for IMU, visual, and depth parts
+        if log_gradients:
             for name, param in model.named_parameters():
                 if param.grad is not None:
                     if 'imu' in name:
                         imu_grad_norm += param.grad.norm().item()
                     elif 'conv' in name:
                         visual_grad_norm += param.grad.norm().item()
+                    elif 'depth' in name:
+                        depth_grad_norm += param.grad.norm().item()
         
         # Clip gradients
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -79,26 +84,40 @@ def train_epoch(model, dataloader, optimizer, device, use_imu=True):
         total_loss += loss.item()
         total_rot_loss += rot_loss.item()
         total_trans_loss += trans_loss.item()
+        total_depth_trans_loss += depth_trans_loss.item()
         
         # Update progress bar
         progress_bar.set_postfix({
             'loss': f"{loss.item():.4f}",
             'rot_loss': f"{rot_loss.item():.4f}",
-            'trans_loss': f"{trans_loss.item():.4f}"
+            'trans_loss': f"{trans_loss.item():.4f}",
+            'depth_loss': f"{depth_trans_loss.item():.4f}"
         })
     
     # Calculate average losses
     avg_loss = total_loss / len(dataloader)
     avg_rot_loss = total_rot_loss / len(dataloader)
     avg_trans_loss = total_trans_loss / len(dataloader)
+    avg_depth_trans_loss = total_depth_trans_loss / len(dataloader)
     std_loss = np.std(losses)
     
     # Log gradient information
-    if log_imu_gradients and imu_grad_norm > 0:
-        logger.info(f"IMU gradient norm: {imu_grad_norm:.4f}, Visual gradient norm: {visual_grad_norm:.4f}, "
-                   f"Ratio: {imu_grad_norm/visual_grad_norm if visual_grad_norm > 0 else 0:.4f}")
+    if log_gradients:
+        grad_info = []
+        if imu_grad_norm > 0:
+            grad_info.append(f"IMU grad norm: {imu_grad_norm:.4f}")
+        if visual_grad_norm > 0:
+            grad_info.append(f"Visual grad norm: {visual_grad_norm:.4f}")
+        if depth_grad_norm > 0:
+            grad_info.append(f"Depth grad norm: {depth_grad_norm:.4f}")
+        if imu_grad_norm > 0 and visual_grad_norm > 0:
+            grad_info.append(f"IMU/Visual ratio: {imu_grad_norm/visual_grad_norm:.4f}")
+        if depth_grad_norm > 0 and visual_grad_norm > 0:
+            grad_info.append(f"Depth/Visual ratio: {depth_grad_norm/visual_grad_norm:.4f}")
+        if grad_info:
+            logger.info(", ".join(grad_info))
     
-    return avg_loss, avg_rot_loss, avg_trans_loss, std_loss
+    return avg_loss, avg_rot_loss, avg_trans_loss, avg_depth_trans_loss, std_loss
 
 def validate(model, dataloader, device, use_imu=True, visualize=False, log_dir=None):
     """Validate the model on validation data."""
@@ -106,6 +125,7 @@ def validate(model, dataloader, device, use_imu=True, visualize=False, log_dir=N
     total_loss = 0.0
     total_rot_loss = 0.0
     total_trans_loss = 0.0
+    total_depth_trans_loss = 0.0
     losses = []
     
     # ATE and RPE metrics
@@ -125,36 +145,36 @@ def validate(model, dataloader, device, use_imu=True, visualize=False, log_dir=N
     with torch.no_grad():
         progress_bar = tqdm(dataloader, desc="Validating", unit="batch")
         for batch_idx, data in enumerate(progress_bar):
-            # Unpack data
+            # Unpack data based on enabled modalities
+            idx = 0
+            rgb_seq = data[idx].to(device)
+            idx += 1
+            
+            depth_seq = None
+            if par.use_depth:
+                depth_seq = data[idx].to(device)
+                idx += 1
+            
+            imu_data = None
             if use_imu:
-                rgb_seq, rel_poses, abs_poses, imu_data = data
-                # Move data to device
-                rgb_seq = rgb_seq.to(device)
-                rel_poses = rel_poses.to(device)
-                abs_poses = abs_poses.to(device)
-                if imu_data is not None:
-                    imu_data = imu_data.to(device)
-                
-                # Forward pass with IMU
-                pred_rel_poses = model(rgb_seq, imu_data)
-            else:
-                rgb_seq, rel_poses, abs_poses, _ = data  # Ignore IMU data
-                # Move data to device
-                rgb_seq = rgb_seq.to(device)
-                rel_poses = rel_poses.to(device)
-                abs_poses = abs_poses.to(device)
-                
-                # Forward pass without IMU
-                pred_rel_poses = model(rgb_seq)
+                imu_data = data[idx].to(device)
+                idx += 1
+            
+            rel_poses = data[idx].to(device)
+            abs_poses = data[idx+1].to(device)
+            
+            # Forward pass
+            pred_rel_poses = model(rgb_seq, depth=depth_seq, imu_data=imu_data)
             
             # Compute loss
-            loss, rot_loss, trans_loss = model.get_loss(pred_rel_poses, rel_poses)
+            loss, rot_loss, trans_loss, depth_trans_loss = model.get_loss(pred_rel_poses, rel_poses)
             losses.append(loss.item())
             
             # Update statistics
             total_loss += loss.item()
             total_rot_loss += rot_loss.item()
             total_trans_loss += trans_loss.item()
+            total_depth_trans_loss += depth_trans_loss.item()
             
             # Compute trajectory and metrics
             for i in range(len(rgb_seq)):
@@ -196,13 +216,15 @@ def validate(model, dataloader, device, use_imu=True, visualize=False, log_dir=N
             progress_bar.set_postfix({
                 'loss': f"{loss.item():.4f}",
                 'rot_loss': f"{rot_loss.item():.4f}",
-                'trans_loss': f"{loss.item():.4f}"
+                'trans_loss': f"{trans_loss.item():.4f}",
+                'depth_loss': f"{depth_trans_loss.item():.4f}"
             })
     
     # Calculate average losses
     avg_loss = total_loss / len(dataloader)
     avg_rot_loss = total_rot_loss / len(dataloader)
     avg_trans_loss = total_trans_loss / len(dataloader)
+    avg_depth_trans_loss = total_depth_trans_loss / len(dataloader)
     std_loss = np.std(losses)
     
     # Calculate average metrics
@@ -219,7 +241,8 @@ def validate(model, dataloader, device, use_imu=True, visualize=False, log_dir=N
         'rpe_trans_mean': avg_rpe_trans_mean,
         'rpe_trans_std': avg_rpe_trans_std,
         'rpe_rot_mean': avg_rpe_rot_mean,
-        'rpe_rot_std': avg_rpe_rot_std
+        'rpe_rot_std': avg_rpe_rot_std,
+        'depth_trans_loss': avg_depth_trans_loss
     }
     
     # Visualize best and worst trajectories if requested
@@ -238,7 +261,7 @@ def validate(model, dataloader, device, use_imu=True, visualize=False, log_dir=N
         fig_worst, _ = visualize_trajectory(
             worst_traj['pred'], 
             worst_traj['gt'], 
-            title=f"Worst Trajectory (ATE: {worst_traj['error']:.4f}m, ID: {worst_traj['idx']})", 
+            title=f"Worst Trajectory (ATE: {worst_traj['error']:.4f}m, ID: {best_traj['idx']})", 
             save_path=os.path.join(log_dir, f"worst_trajectory{imu_suffix}.png")
         )
         
@@ -246,7 +269,7 @@ def validate(model, dataloader, device, use_imu=True, visualize=False, log_dir=N
         plt.close(fig_best)
         plt.close(fig_worst)
     
-    return avg_loss, avg_rot_loss, avg_trans_loss, std_loss, metrics
+    return avg_loss, avg_rot_loss, avg_trans_loss, avg_depth_trans_loss, std_loss, metrics
 
 def train(use_imu=True, use_integrated_imu=True, batch_size=None, learning_rate=None):
     """Main training function."""
@@ -292,26 +315,26 @@ def train(use_imu=True, use_integrated_imu=True, batch_size=None, learning_rate=
     
     # Create visual-inertial odometry model
     try:
-        # Try with full parameters
         model = VisualInertialOdometryModel(
             imsize1=par.img_h, 
             imsize2=par.img_w, 
             batchNorm=par.batch_norm,
             use_imu=use_imu,
-            imu_feature_size=128,
+            imu_feature_size=512,
             imu_input_size=imu_input_size,
-            use_adaptive_weighting=True
+            use_adaptive_weighting=True,
+            use_depth_translation=False,
+            pretrained_depth_path=par.pretrained_depth if par.use_depth else None
         )
     except TypeError as e:
         logger.warning(f"Model initialization error: {e}")
         logger.info("Retrying with reduced parameters...")
-        
-        # Try with reduced parameters
         model = VisualInertialOdometryModel(
             imsize1=par.img_h, 
             imsize2=par.img_w, 
             batchNorm=par.batch_norm,
-            use_imu=use_imu
+            use_imu=use_imu,
+            pretrained_depth_path=par.pretrained_depth if par.use_depth else None
         )
     
     model = model.to(device)
@@ -325,11 +348,11 @@ def train(use_imu=True, use_integrated_imu=True, batch_size=None, learning_rate=
     if par.pretrained_flownet and os.path.exists(par.pretrained_flownet):
         load_pretrained_flownet(model, par.pretrained_flownet)
     
-    # Create optimizer
-    if par.optim['opt'] == 'Adam':
-        optimizer = optim.Adam(model.parameters(), lr=par.optim['lr'], weight_decay=par.optim['weight_decay'])
-    else:
-        optimizer = optim.SGD(model.parameters(), lr=par.optim['lr'], momentum=0.9, weight_decay=par.optim['weight_decay'])
+    # Create optimizer with differential learning rates
+    optimizer = optim.Adam([
+        {'params': model.depth_encoder.parameters(), 'lr': par.optim['lr'] * 0.1},  # Lower LR for pretrained depth encoder
+        {'params': [p for n, p in model.named_parameters() if 'depth' not in n], 'lr': par.optim['lr']}
+    ], weight_decay=par.optim['weight_decay'])
     
     # Create learning rate scheduler
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
@@ -359,24 +382,26 @@ def train(use_imu=True, use_integrated_imu=True, batch_size=None, learning_rate=
     train_losses = []
     val_losses = []
     val_ates = []
+    depth_trans_losses = []
     
     # Train for specified number of epochs
     for epoch in range(par.epochs):
         logger.info(f"Epoch {epoch+1}/{par.epochs}")
         
         # Train
-        train_loss, train_rot_loss, train_trans_loss, train_loss_std = train_epoch(
+        train_loss, train_rot_loss, train_trans_loss, train_depth_trans_loss, train_loss_std = train_epoch(
             model, train_loader, optimizer, device, use_imu=use_imu
         )
         train_losses.append(train_loss)
         
         # Validate
         visualize_epoch = (epoch + 1) % 10 == 0 or epoch == par.epochs - 1
-        val_loss, val_rot_loss, val_trans_loss, val_loss_std, metrics = validate(
+        val_loss, val_rot_loss, val_trans_loss, val_depth_trans_loss, val_loss_std, metrics = validate(
             model, val_loader, device, use_imu=use_imu, visualize=visualize_epoch, log_dir=par.log_dir
         )
         val_losses.append(val_loss)
         val_ates.append(metrics['ate_mean'])
+        depth_trans_losses.append(val_depth_trans_loss)
         
         # Update scheduler
         scheduler.step(val_loss)
@@ -388,10 +413,12 @@ def train(use_imu=True, use_integrated_imu=True, batch_size=None, learning_rate=
             'train_loss_std': train_loss_std,
             'train_rot_loss': train_rot_loss,
             'train_trans_loss': train_trans_loss,
+            'train_depth_trans_loss': train_depth_trans_loss,
             'val_loss_mean': val_loss,
             'val_loss_std': val_loss_std,
             'val_rot_loss': val_rot_loss,
             'val_trans_loss': val_trans_loss,
+            'val_depth_trans_loss': val_depth_trans_loss,
             'learning_rate': optimizer.param_groups[0]['lr'],
             'ate_mean': metrics['ate_mean'],
             'ate_std': metrics['ate_std'],
@@ -404,6 +431,8 @@ def train(use_imu=True, use_integrated_imu=True, batch_size=None, learning_rate=
         # Print metrics
         logger.info(f"Train Loss: {train_loss:.6f} ± {train_loss_std:.6f}")
         logger.info(f"Val Loss: {val_loss:.6f} ± {val_loss_std:.6f}")
+        logger.info(f"Train Depth Trans Loss: {train_depth_trans_loss:.6f}")
+        logger.info(f"Val Depth Trans Loss: {val_depth_trans_loss:.6f}")
         logger.info(f"ATE: {metrics['ate_mean']:.4f} ± {metrics['ate_std']:.4f} m")
         logger.info(f"RPE Trans: {metrics['rpe_trans_mean']:.4f} ± {metrics['rpe_trans_std']:.4f} m")
         logger.info(f"RPE Rot: {metrics['rpe_rot_mean']:.4f} ± {metrics['rpe_rot_std']:.4f} rad")
@@ -414,7 +443,7 @@ def train(use_imu=True, use_integrated_imu=True, batch_size=None, learning_rate=
             torch.save(model.state_dict(), par.model_path)
             logger.info(f"New best model saved with validation loss: {best_val_loss:.6f}")
         
-        # Also save best model by ATE (might be different from lowest loss)
+        # Also save best model by ATE
         if metrics['ate_mean'] < best_ate:
             best_ate = metrics['ate_mean']
             ate_model_path = os.path.join(par.model_dir, f"{par.model_name}_best_ate.pt")
@@ -428,10 +457,10 @@ def train(use_imu=True, use_integrated_imu=True, batch_size=None, learning_rate=
             logger.info(f"Checkpoint saved at epoch {epoch+1}")
             
             # Plot and save loss curve
-            plt.figure(figsize=(12, 8))
+            plt.figure(figsize=(12, 12))
             
             # Loss plot
-            plt.subplot(2, 1, 1)
+            plt.subplot(3, 1, 1)
             plt.plot(range(1, len(train_losses) + 1), train_losses, marker='o', label='Training Loss')
             plt.plot(range(1, len(val_losses) + 1), val_losses, marker='x', label='Validation Loss')
             plt.axhline(y=best_val_loss, color='r', linestyle='--', label=f'Best Val Loss: {best_val_loss:.6f}')
@@ -442,12 +471,21 @@ def train(use_imu=True, use_integrated_imu=True, batch_size=None, learning_rate=
             plt.grid(True)
             
             # ATE plot
-            plt.subplot(2, 1, 2)
+            plt.subplot(3, 1, 2)
             plt.plot(range(1, len(val_ates) + 1), val_ates, marker='s', color='green', label='ATE')
             plt.axhline(y=best_ate, color='r', linestyle='--', label=f'Best ATE: {best_ate:.4f}m')
             plt.xlabel('Epoch')
             plt.ylabel('ATE (m)')
             plt.title('Absolute Trajectory Error')
+            plt.legend()
+            plt.grid(True)
+            
+            # Depth Translation Loss plot
+            plt.subplot(3, 1, 3)
+            plt.plot(range(1, len(depth_trans_losses) + 1), depth_trans_losses, marker='d', color='purple', label='Depth Trans Loss')
+            plt.xlabel('Epoch')
+            plt.ylabel('Depth Translation Loss')
+            plt.title('Depth-Supervised Translation Loss')
             plt.legend()
             plt.grid(True)
             
@@ -491,7 +529,6 @@ def test(model_path, use_imu=True, use_integrated_imu=True, batch_size=None):
     
     # Create model
     try:
-        # Try with full parameters
         model = VisualInertialOdometryModel(
             imsize1=par.img_h, 
             imsize2=par.img_w, 
@@ -499,18 +536,19 @@ def test(model_path, use_imu=True, use_integrated_imu=True, batch_size=None):
             use_imu=use_imu,
             imu_feature_size=128,
             imu_input_size=imu_input_size,
-            use_adaptive_weighting=True
+            use_adaptive_weighting=True,
+            use_depth_translation=True,
+            pretrained_depth_path=par.pretrained_depth if par.use_depth else None
         )
     except TypeError as e:
         logger.warning(f"Model initialization error: {e}")
         logger.info("Retrying with reduced parameters...")
-        
-        # Try with reduced parameters
         model = VisualInertialOdometryModel(
             imsize1=par.img_h, 
             imsize2=par.img_w, 
             batchNorm=par.batch_norm,
-            use_imu=use_imu
+            use_imu=use_imu,
+            pretrained_depth_path=par.pretrained_depth if par.use_depth else None
         )
     
     # Load trained weights
@@ -519,7 +557,7 @@ def test(model_path, use_imu=True, use_integrated_imu=True, batch_size=None):
     model.eval()
     
     # Run validation as test
-    _, _, _, _, metrics = validate(
+    _, _, _, _, _, metrics = validate(
         model, 
         test_loader, 
         device, 
@@ -533,6 +571,7 @@ def test(model_path, use_imu=True, use_integrated_imu=True, batch_size=None):
     logger.info(f"ATE: {metrics['ate_mean']:.4f} ± {metrics['ate_std']:.4f} m")
     logger.info(f"RPE Trans: {metrics['rpe_trans_mean']:.4f} ± {metrics['rpe_trans_std']:.4f} m")
     logger.info(f"RPE Rot: {metrics['rpe_rot_mean']:.4f} ± {metrics['rpe_rot_std']:.4f} rad")
+    logger.info(f"Depth Translation Loss: {metrics['depth_trans_loss']:.6f}")
     
     return metrics
 
@@ -554,7 +593,6 @@ if __name__ == "__main__":
     if args.test:
         # Run test mode
         if args.model_path is None:
-            # If no model path provided, use default based on configuration
             imu_suffix = "_with_imu" if use_imu else ""
             integrated_suffix = "_integrated" if use_integrated_imu else ""
             model_name = f"{par.model_name}{imu_suffix}{integrated_suffix}"

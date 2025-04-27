@@ -6,13 +6,13 @@ import numpy as np
 class IMUPreprocessor:
     """
     Preprocesses IMU data by applying bias correction and integration.
-    Handles 100Hz IMU data for 25Hz camera frames.
+    Handles IMU data already downsampled to 25Hz to match camera frames.
     """
     def __init__(self, 
                  gyro_bias_init=None, 
                  acc_bias_init=None,
                  apply_integration=True,
-                 dt=0.01,  # 100Hz
+                 dt=0.04,  # 25Hz (1/25 = 0.04s)
                  gravity=9.81,
                  body_to_camera=None):
         """
@@ -20,7 +20,7 @@ class IMUPreprocessor:
             gyro_bias_init: Initial gyroscope bias estimate [3]
             acc_bias_init: Initial accelerometer bias estimate [3]
             apply_integration: Whether to integrate IMU measurements
-            dt: Time step between IMU measurements in seconds
+            dt: Time step between IMU measurements in seconds (now 0.04 for 25Hz)
             gravity: Gravity constant
             body_to_camera: 3x3 rotation matrix for body-to-camera transformation
         """
@@ -132,7 +132,7 @@ class IMUPreprocessor:
     def process_sequence(self, imu_data, integrate_segments=True, seq_len=None):
         """
         Process a sequence of IMU data for visual-inertial odometry.
-        Handles 100Hz IMU data with 25Hz camera frames (4 IMU samples per frame).
+        IMU data is already at 25Hz, matching camera frames.
         
         Args:
             imu_data: Raw IMU data [seq_len, 6]
@@ -142,46 +142,38 @@ class IMUPreprocessor:
         Returns:
             Processed IMU features for each camera frame [n_frames, feature_dim]
         """
-        if imu_data is None or len(imu_data) < 4:
+        if imu_data is None or len(imu_data) < 1:
             return None
             
         # Apply bias correction
         corrected_imu = self.correct_bias(imu_data)
         
-        # IMU frequency parameters
-        camera_freq = 25  # Hz
-        imu_freq = 100  # Hz
-        imu_per_frame = imu_freq // camera_freq  # Should be 4
+        # Determine number of frames
+        n_frames = len(corrected_imu)
         
-        # Calculate available complete segments
-        n_complete_segments = len(corrected_imu) // imu_per_frame
-        
-        # If we have fewer segments than required sequence length, or sequence length not specified
+        # If we have fewer frames than required sequence length, or sequence length not specified
         if seq_len is None:
-            # Use all available complete segments
-            required_segments = n_complete_segments
+            # Use all available frames
+            required_frames = n_frames
         else:
             # Use the required sequence length
-            required_segments = seq_len
+            required_frames = seq_len
         
-        # Ensure we have at least one segment
-        if required_segments < 1:
-            required_segments = 1
+        # Ensure we have at least one frame
+        if required_frames < 1:
+            required_frames = 1
         
         # Prepare output array - size depends on feature type
         feature_dim = 21 if integrate_segments and self.apply_integration else 6
-        imu_features = np.zeros((required_segments, feature_dim))
+        imu_features = np.zeros((required_frames, feature_dim))
         
-        # Process available segments
-        for i in range(min(n_complete_segments, required_segments)):
-            # Extract segment
-            start_idx = i * imu_per_frame
-            end_idx = min(start_idx + imu_per_frame, len(corrected_imu))
-            segment = corrected_imu[start_idx:end_idx]
-            
-            # Process segment based on requested feature type
-            if integrate_segments and self.apply_integration and len(segment) >= 2:
-                # Integrate IMU data within segment
+        # Process each frame
+        for i in range(min(n_frames, required_frames)):
+            if integrate_segments and self.apply_integration:
+                # Use the current and next frame for integration (if available)
+                end_idx = min(i + 2, len(corrected_imu))
+                segment = corrected_imu[i:end_idx]
+                
                 try:
                     orientations, velocities, positions = self.integrate_imu(segment)
                     
@@ -193,58 +185,48 @@ class IMUPreprocessor:
                     mean_acc = np.mean(segment[:, 0:3], axis=0)
                     mean_gyro = np.mean(segment[:, 3:6], axis=0)
                     
-                    if len(orientations) > 0:
-                        # Compute orientation change from identity
+                    if len(orientations) > 1:  # Need at least 2 frames for orientation change
+                        # Compute orientation change from start to end
                         orientation_change = orientations[-1] - np.eye(3)
                         orientation_change = orientation_change.flatten()
-                        
-                        # Get final velocity and total displacement
                         final_velocity = velocities[-1] if len(velocities) > 0 else np.zeros(3)
                         total_displacement = positions[-1] if len(positions) > 0 else np.zeros(3)
-                        
-                        # Combine features
-                        features = np.concatenate([
-                            mean_acc,               # 3D
-                            mean_gyro,              # 3D
-                            orientation_change,     # 9D
-                            final_velocity,         # 3D
-                            total_displacement      # 3D
-                        ])
-                        
-                        imu_features[i] = features
                     else:
-                        # Fallback if integration failed
-                        zeros = np.zeros(15)  # 9D orientation + 3D velocity + 3D position
-                        imu_features[i] = np.concatenate([mean_acc, mean_gyro, zeros])
-                        
+                        # If only one frame, use zeros for derived features
+                        orientation_change = np.zeros(9)
+                        final_velocity = np.zeros(3)
+                        total_displacement = np.zeros(3)
+                    
+                    features = np.concatenate([
+                        mean_acc,               # 3D
+                        mean_gyro,              # 3D
+                        orientation_change,     # 9D
+                        final_velocity,         # 3D
+                        total_displacement      # 3D
+                    ])
+                    imu_features[i] = features
                 except Exception as e:
-                    # On error, use mean values and zeros
                     print(f"IMU integration error: {e}")
                     mean_acc = np.mean(segment[:, 0:3], axis=0) if len(segment) > 0 else np.zeros(3)
                     mean_gyro = np.mean(segment[:, 3:6], axis=0) if len(segment) > 0 else np.zeros(3)
                     zeros = np.zeros(15)
                     imu_features[i] = np.concatenate([mean_acc, mean_gyro, zeros])
             else:
-                # Simple features: just use first IMU sample in segment
-                if len(segment) > 0:
-                    imu_features[i] = segment[0]
-                else:
-                    # Zero features if segment is empty
-                    imu_features[i] = np.zeros(6)
+                # Simple features: just use the IMU sample at this frame
+                imu_features[i] = corrected_imu[i]
         
-        # Fill remaining required segments with repeats or zeros
-        if n_complete_segments < required_segments:
-            # Use last valid segment data or zeros
-            if n_complete_segments > 0:
-                # Repeat last segment data
-                for i in range(n_complete_segments, required_segments):
-                    imu_features[i] = imu_features[n_complete_segments-1]
+        # Fill remaining required frames with repeats or zeros
+        if n_frames < required_frames:
+            # Use last valid frame data or zeros
+            if n_frames > 0:
+                # Repeat last frame data
+                for i in range(n_frames, required_frames):
+                    imu_features[i] = imu_features[n_frames-1]
             else:
-                # All zeros if no valid segments
+                # All zeros if no valid frames
                 pass  # Already initialized with zeros
         
         return imu_features
-
 
 class IMUFeatureExtractor(nn.Module):
     """
@@ -298,7 +280,6 @@ class IMUFeatureExtractor(nn.Module):
         x = x.view(batch_size, seq_len, self.output_size)
         
         return x
-
 
 class AdaptiveWeighting(nn.Module):
     """
@@ -362,7 +343,6 @@ class AdaptiveWeighting(nn.Module):
         fused = weighted_visual + weighted_imu
         
         return fused
-
 
 class VisualInertialFusion(nn.Module):
     """

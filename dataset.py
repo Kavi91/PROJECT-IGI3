@@ -18,6 +18,17 @@ def natural_sort_key(s):
     """Sort strings with numbers in natural order."""
     return [int(c) if c.isdigit() else c for c in re.split(r'(\d+)', s)]
 
+def open_float16(image):
+    """Decode 16-bit float depth map from PNG, as per MidAir official method."""
+    try:
+        # Use np.array() instead of np.asarray() to ensure a writeable copy
+        img = np.array(image, np.uint16)
+        img.dtype = np.float16
+        return img
+    except Exception as e:
+        logger.error(f"Error decoding depth image: {e}")
+        return None
+
 class VisualInertialOdometryDataset(Dataset):
     """Dataset for visual-inertial odometry."""
     
@@ -34,8 +45,10 @@ class VisualInertialOdometryDataset(Dataset):
         self.trajectories = trajectories
         self.use_imu = use_imu
         self.use_integrated_imu = use_integrated_imu
+        self.use_depth = par.use_depth
+        self.use_gps = par.use_gps
         
-        # Image transformations
+        # Image transformations for RGB
         transform_ops = [
             transforms.Resize((par.img_h, par.img_w)),
             transforms.ToTensor()
@@ -43,10 +56,18 @@ class VisualInertialOdometryDataset(Dataset):
         self.transformer = transforms.Compose(transform_ops)
         self.normalizer = transforms.Normalize(mean=par.img_means_rgb, std=par.img_stds_rgb)
         
+        # Depth transformation (only resizing, ToTensor is applied later)
+        self.depth_transform = transforms.Compose([
+            transforms.Resize((par.img_h, par.img_w))
+        ])
+        
+        # Depth normalization parameters
+        self.depth_mean = par.depth_mean
+        self.depth_std = par.depth_std if par.depth_std != 0 else 1.0  # Avoid division by zero
+        
         # Create augmentation pipeline for training
         if is_training:
             self.augmentation_pipeline = create_vo_augmentation_pipeline(
-                # Customize augmentation parameters here
                 color_jitter_prob=0.8,
                 brightness_range=0.3,
                 contrast_range=0.3,
@@ -69,6 +90,10 @@ class VisualInertialOdometryDataset(Dataset):
         logger.info(f"Created {self.dataset_type} dataset with {len(self.sequences)} sequences")
         if self.use_imu:
             logger.info(f"Using IMU data with {'integrated' if use_integrated_imu else 'raw'} features")
+        if self.use_depth:
+            logger.info(f"Using Depth data with mean={self.depth_mean:.4f}, std={self.depth_std:.4f}")
+        if self.use_gps:
+            logger.info("Using GPS data")
     
     def _prepare_sequences(self):
         """Prepare sequences from trajectories."""
@@ -85,6 +110,29 @@ class VisualInertialOdometryDataset(Dataset):
                 logger.warning(f"Pose file not found: {pose_file}")
                 continue
                 
+            # Get Depth file paths if enabled
+            depth_files = []
+            depth_paths = []
+            if self.use_depth:
+                depth_dir = os.path.join(par.image_dir, climate_set, trajectory, "depth")
+                if os.path.exists(depth_dir):
+                    depth_files = [f for f in os.listdir(depth_dir) if f.lower().endswith('.png')]
+                    depth_files.sort(key=natural_sort_key)
+                    depth_paths = [os.path.join(depth_dir, f) for f in depth_files]
+                else:
+                    logger.warning(f"Depth directory not found: {depth_dir}")
+                    depth_paths = []
+            
+            # Get GPS file if enabled
+            gps_file = None
+            if self.use_gps:
+                gps_dir = os.path.join(par.data_dir, climate_set, trajectory, "gps")
+                if os.path.exists(gps_dir):
+                    gps_file = os.path.join(gps_dir, "gps.npy")
+                    if not os.path.exists(gps_file):
+                        logger.warning(f"GPS file not found: {gps_file}")
+                        gps_file = None
+            
             # Get IMU file if using IMU
             imu_file = None
             imu_bias_file = None
@@ -103,26 +151,38 @@ class VisualInertialOdometryDataset(Dataset):
             # Load poses
             poses = np.load(pose_file)
             
+            # Load GPS data if available
+            gps_data = None
+            if gps_file is not None:
+                try:
+                    gps_data = np.load(gps_file)
+                    if len(gps_data) < len(poses):
+                        logger.warning(f"GPS data shorter than poses for {climate_set}/{trajectory}: {len(gps_data)} vs {len(poses)}. Padding...")
+                        pad_width = ((0, len(poses) - len(gps_data)), (0, 0))
+                        gps_data = np.pad(gps_data, pad_width, mode='edge')
+                    elif len(gps_data) > len(poses):
+                        logger.warning(f"GPS data longer than poses for {climate_set}/{trajectory}: {len(gps_data)} vs {len(poses)}. Truncating...")
+                        gps_data = gps_data[:len(poses)]
+                except Exception as e:
+                    logger.error(f"Error loading GPS data for {climate_set}/{trajectory}: {e}")
+                    gps_data = None
+            
             # Load IMU data if available
             imu_data = None
             imu_bias = None
             if imu_file is not None:
                 try:
                     imu_data = np.load(imu_file)
-                    # Check if IMU data length matches
                     if len(imu_data) < len(poses):
                         logger.warning(f"IMU data shorter than poses for {climate_set}/{trajectory}: {len(imu_data)} vs {len(poses)}. Padding...")
-                        # Pad with last value
                         pad_width = ((0, len(poses) - len(imu_data)), (0, 0))
                         imu_data = np.pad(imu_data, pad_width, mode='edge')
                     elif len(imu_data) > len(poses):
                         logger.warning(f"IMU data longer than poses for {climate_set}/{trajectory}: {len(imu_data)} vs {len(poses)}. Truncating...")
                         imu_data = imu_data[:len(poses)]
                     
-                    # Load IMU bias if available
                     if imu_bias_file is not None:
                         imu_bias = np.load(imu_bias_file)
-                        # Check if bias has correct shape [2, 3] (acc_bias, gyro_bias)
                         if imu_bias.shape != (2, 3):
                             logger.warning(f"IMU bias has unexpected shape {imu_bias.shape} for {climate_set}/{trajectory}")
                             imu_bias = None
@@ -136,9 +196,11 @@ class VisualInertialOdometryDataset(Dataset):
             rgb_files.sort(key=natural_sort_key)
             rgb_paths = [os.path.join(rgb_dir, f) for f in rgb_files]
             
-            # Check if enough frames
+            # Determine number of frames
             n_frames = min(len(poses), len(rgb_paths))
-            if n_frames < par.seq_len + 1:  # Need at least seq_len + 1 frames
+            if self.use_depth and depth_paths:
+                n_frames = min(n_frames, len(depth_paths))
+            if n_frames < par.seq_len + 1:
                 logger.warning(f"Not enough frames in {climate_set}/{trajectory}: {n_frames}")
                 continue
                 
@@ -146,6 +208,16 @@ class VisualInertialOdometryDataset(Dataset):
             for i in range(0, n_frames - par.seq_len):
                 seq_rgb_paths = rgb_paths[i:i+par.seq_len+1]
                 seq_poses = poses[i:i+par.seq_len+1]
+                
+                # Get Depth data for this sequence if available
+                seq_depth_paths = []
+                if self.use_depth and depth_paths:
+                    seq_depth_paths = depth_paths[i:i+par.seq_len+1]
+                
+                # Get GPS data for this sequence if available
+                seq_gps_data = None
+                if gps_data is not None:
+                    seq_gps_data = gps_data[i:i+par.seq_len+1]
                 
                 # Get IMU data for this sequence if available
                 seq_imu_data = None
@@ -166,9 +238,11 @@ class VisualInertialOdometryDataset(Dataset):
                 # Store sequence data
                 self.sequences.append({
                     'rgb_paths': seq_rgb_paths,
+                    'depth_paths': seq_depth_paths,
                     'rel_poses': np.array(rel_poses),
                     'abs_poses': seq_poses,
                     'imu_data': seq_imu_data,
+                    'gps_data': seq_gps_data,
                     'imu_bias': imu_bias,
                     'climate_set': climate_set,
                     'trajectory': trajectory,
@@ -211,8 +285,7 @@ class VisualInertialOdometryDataset(Dataset):
         Returns:
             Preprocessed IMU data [seq_len, feature_dim]
         """
-        # Skip if no IMU data
-        if imu_data is None:
+        if imu_data is None or len(imu_data) < 4:
             return None
         
         # Extract bias values
@@ -235,7 +308,7 @@ class VisualInertialOdometryDataset(Dataset):
             gyro_bias_init=gyro_bias,
             acc_bias_init=acc_bias,
             apply_integration=self.use_integrated_imu,
-            dt=0.01,  # 100Hz
+            dt=0.01,
             body_to_camera=body_to_camera
         )
         
@@ -272,25 +345,18 @@ class VisualInertialOdometryDataset(Dataset):
                     padding = np.repeat(last_frame, seq_len - len(corrected), axis=0)
                     corrected = np.concatenate([corrected, padding], axis=0)
                 else:
-                    # Create zeros if no IMU data
                     corrected = np.zeros((seq_len, 6))
             else:
-                # Downsample if we have more data than needed
                 indices = np.linspace(0, len(corrected)-1, seq_len, dtype=int)
                 corrected = corrected[indices]
                 
             # For integrated features, create a simplified version
             if self.use_integrated_imu:
-                # Extract basic components and pad with zeros
-                feature_dim = 21  # 3 (acc) + 3 (gyro) + 9 (orientation) + 3 (velocity) + 3 (position)
+                feature_dim = 21
                 features = np.zeros((seq_len, feature_dim))
-                
-                # Use actual IMU values for acc and gyro, zeros for derived features
-                features[:, 0:6] = corrected[:, 0:6]  # acc and gyro
-                
+                features[:, 0:6] = corrected[:, 0:6]
                 return features
             else:
-                # Return raw corrected data
                 return corrected
     
     def __len__(self):
@@ -305,106 +371,177 @@ class VisualInertialOdometryDataset(Dataset):
         rgb_sequence = []
         for img_path in sequence['rgb_paths']:
             try:
-                # Open and transform image
                 img = Image.open(img_path)
                 img_tensor = self.transformer(img)
                 rgb_sequence.append(img_tensor)
             except Exception as e:
                 logger.error(f"Error loading image {img_path}: {e}")
-                # Create a zero tensor on error
                 img_tensor = torch.zeros(3, par.img_h, par.img_w)
                 rgb_sequence.append(img_tensor)
         
-        # Stack images
         rgb_sequence = torch.stack(rgb_sequence)  # [seq_len+1, 3, H, W]
+        
+        # Load Depth images if enabled (using official MidAir decoding)
+        depth_sequence = None
+        if self.use_depth and sequence['depth_paths']:
+            depth_sequence = []
+            for depth_path in sequence['depth_paths']:
+                try:
+                    # Load depth image as PIL Image
+                    depth_img = Image.open(depth_path)
+                    # Decode depth using official method
+                    depth_array = open_float16(depth_img)
+                    if depth_array is None:
+                        raise ValueError("Failed to decode depth image")
+                    
+                    # Process depth as per official script
+                    depth_array = np.clip(depth_array, 1, 1250, depth_array)  # Clip between 1 and 1250 meters
+                    # Apply logarithmic normalization: (log(depth) - 1) / (log(1250) - 1)
+                    depth_array = (np.log(depth_array) - np.log(1)) / (np.log(1250) - np.log(1))
+                    # Apply standardization using depth_mean and depth_std
+                    depth_array = (depth_array - self.depth_mean) / self.depth_std
+                    # Convert to PIL Image for transformation
+                    depth_img = Image.fromarray(depth_array.astype(np.float32))
+                    # Apply resizing
+                    depth_img = self.depth_transform(depth_img)
+                    # Convert to tensor
+                    depth_tensor = transforms.ToTensor()(depth_img)
+                    depth_sequence.append(depth_tensor)
+                except Exception as e:
+                    logger.error(f"Error loading depth image {depth_path}: {e}")
+                    depth_tensor = torch.zeros(1, par.img_h, par.img_w)
+                    depth_sequence.append(depth_tensor)
+            depth_sequence = torch.stack(depth_sequence)  # [seq_len+1, 1, H, W]
         
         # Get poses
         rel_poses = torch.FloatTensor(sequence['rel_poses'])
         abs_poses = torch.FloatTensor(sequence['abs_poses'])
         
+        # Get GPS data if enabled
+        gps_data = None
+        if self.use_gps and sequence['gps_data'] is not None:
+            gps_data = torch.FloatTensor(sequence['gps_data'])
+            gps_data = gps_data[:-1]  # Match seq_len (exclude last frame)
+            # Ensure correct length
+            if gps_data.shape[0] != par.seq_len:
+                if gps_data.shape[0] > par.seq_len:
+                    gps_data = gps_data[:par.seq_len]
+                else:
+                    pad_size = par.seq_len - gps_data.shape[0]
+                    gps_data = torch.cat([gps_data, torch.zeros(pad_size, gps_data.shape[1])], dim=0)
+        
         # Get IMU data with explicit sequence length requirement
         imu_data = None
         if self.use_imu and sequence['imu_data'] is not None:
-            # Debug IMU data shape for first few sequences
-            # if idx < 3:
-            #     logger.info(f"Original IMU data shape for idx {idx}: {sequence['imu_data'].shape}")
-            #     logger.info(f"Sequence length needed: {par.seq_len}")
-            
-            # Preprocess IMU data with explicit sequence length requirement
             try:
                 processed_imu = self._preprocess_imu(sequence['imu_data'], sequence['imu_bias'], par.seq_len)
-                
-                # Check if we have valid IMU features
                 if processed_imu is not None:
                     if processed_imu.shape[0] < par.seq_len:
-                        # This should not happen with our fixed processor but handle it just in case
                         logger.warning(f"Processed IMU still has wrong length: {processed_imu.shape[0]} vs {par.seq_len} needed")
-                        
-                        # Pad with last row repeated
                         if processed_imu.shape[0] > 0:
                             last_row = processed_imu[-1:]
                             padding = np.repeat(last_row, par.seq_len - processed_imu.shape[0], axis=0)
                             processed_imu = np.concatenate([processed_imu, padding], axis=0)
                         else:
-                            # Create zeros array of correct shape if no valid data
                             feature_dim = 21 if self.use_integrated_imu else 6
                             processed_imu = np.zeros((par.seq_len, feature_dim))
-                    
-                    # Convert to tensor
                     imu_data = torch.FloatTensor(processed_imu)
-                    
-                    # Debug first few frames
-                    # if idx < 3:
-                    #     logger.info(f"Processed IMU shape: {imu_data.shape}")
-                    #     logger.info(f"IMU data sample[0]: {imu_data[0][:5]}...")
             except Exception as e:
                 logger.error(f"Error processing IMU data for sequence {idx}: {e}")
-                # Create a fallback tensor of zeros with correct shape
                 feature_dim = 21 if self.use_integrated_imu else 6
                 imu_data = torch.zeros((par.seq_len, feature_dim))
         
         # Apply augmentations during training
-        if self.is_training:
-            # Apply sequence-consistent augmentations to RGB only
-            rgb_sequence = self.augmentation_pipeline(rgb_sequence)
-            
-            # Note: We don't augment IMU data to maintain physical consistency
+        # if self.is_training:
+        #     rgb_sequence = self.augmentation_pipeline(rgb_sequence)
+        #     if self.use_depth and depth_sequence is not None:
+        #         # Apply geometric augmentations to depth (skip color jitter/noise)
+        #         geometric_augs = create_vo_augmentation_pipeline(
+        #             color_jitter_prob=0.0, noise_prob=0.0,
+        #             rotation_prob=0.6, rotation_max_degrees=3.0,
+        #             perspective_prob=0.3, perspective_scale=0.05
+        #         )
+        #         depth_sequence = geometric_augs(depth_sequence)
+            # Note: We don't augment IMU or GPS data to maintain physical consistency
         
         # Apply FlowNet normalization if required
         if par.minus_point_5:
             rgb_sequence = rgb_sequence - 0.5
         
-        # Apply normalization
+        # Apply normalization to RGB
         for i in range(rgb_sequence.size(0)):
             rgb_sequence[i] = self.normalizer(rgb_sequence[i])
         
-        return rgb_sequence, rel_poses, abs_poses, imu_data
+        # Return data
+        return_items = [rgb_sequence]
+        if self.use_depth:
+            return_items.append(depth_sequence if depth_sequence is not None else torch.zeros(par.seq_len+1, 1, par.img_h, par.img_w))
+        if self.use_imu:
+            return_items.append(imu_data if imu_data is not None else torch.zeros(par.seq_len, 21 if self.use_integrated_imu else 6))
+        if self.use_gps:
+            return_items.append(gps_data if gps_data is not None else torch.zeros(par.seq_len, 9))
+        return_items.extend([rel_poses, abs_poses])
+        return tuple(return_items)
 
 def collate_with_imu(batch):
     """
-    Custom collate function to handle variable-length IMU data.
+    Custom collate function to handle variable-length data.
     
     Args:
-        batch: List of (rgb_sequence, rel_poses, abs_poses, imu_data) tuples
+        batch: List of (rgb_sequence, [depth_sequence], [imu_data], [gps_data], rel_poses, abs_poses) tuples
         
     Returns:
-        Batched tensors with imu_data as None if any sample has None
+        Batched tensors with optional modalities as None if any sample has None
     """
-    # Unzip the batch
-    rgb_sequences, rel_poses, abs_poses, imu_data = zip(*batch)
+    # Unzip the batch based on enabled modalities
+    idx = 0
+    rgb_sequences = [item[idx] for item in batch]
+    idx += 1
+    
+    depth_sequences = None
+    if par.use_depth:
+        depth_sequences = [item[idx] for item in batch]
+        idx += 1
+    
+    imu_data = None
+    if par.use_imu:
+        imu_data = [item[idx] for item in batch]
+        idx += 1
+    
+    gps_data = None
+    if par.use_gps:
+        gps_data = [item[idx] for item in batch]
+        idx += 1
+    
+    rel_poses = [item[idx] for item in batch]
+    abs_poses = [item[idx+1] for item in batch]
     
     # Stack RGB, rel_poses, and abs_poses
     rgb_sequences = torch.stack(rgb_sequences)
     rel_poses = torch.stack(rel_poses)
     abs_poses = torch.stack(abs_poses)
     
-    # Check if all IMU data is available
-    if all(imu is not None for imu in imu_data):
-        imu_data = torch.stack(imu_data)
-    else:
-        imu_data = None
+    # Stack Depth if enabled
+    if par.use_depth:
+        depth_sequences = torch.stack(depth_sequences) if all(d is not None for d in depth_sequences) else None
     
-    return rgb_sequences, rel_poses, abs_poses, imu_data
+    # Stack IMU if enabled
+    if par.use_imu:
+        imu_data = torch.stack(imu_data) if all(imu is not None for imu in imu_data) else None
+    
+    # Stack GPS if enabled
+    if par.use_gps:
+        gps_data = torch.stack(gps_data) if all(gps is not None for gps in gps_data) else None
+    
+    return_items = [rgb_sequences]
+    if par.use_depth:
+        return_items.append(depth_sequences)
+    if par.use_imu:
+        return_items.append(imu_data)
+    if par.use_gps:
+        return_items.append(gps_data)
+    return_items.extend([rel_poses, abs_poses])
+    return tuple(return_items)
 
 def create_data_loaders(batch_size=None, use_imu=True, use_integrated_imu=True):
     """Create data loaders for training and validation."""
